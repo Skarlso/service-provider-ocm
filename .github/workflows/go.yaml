@@ -1,0 +1,39 @@
+name: E2E Tests
+
+on:
+  pull_request:
+
+jobs:
+  test-e2e:
+    name: E2E Tests
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6
+        with:
+          submodules: recursive
+
+      - name: Set up Go
+        uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6
+        with:
+          go-version-file: go.mod
+
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate template
+        run: |
+          go run ./cmd/template -v -w
+
+      - name: task generate
+        run: |
+          task generate --verbose
+
+      - name: task validate
+        run: task validate --verbose
+
+      - name: Running Test e2e
+        run: task test-e2e
