@@ -38,7 +38,6 @@ import (
 	"github.com/openmcp-project/openmcp-operator/lib/utils"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/Skarlso/service-provider-ocm/api/crds"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apiextensionv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -51,6 +50,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+
+	"github.com/Skarlso/service-provider-ocm/api/crds"
 
 	spruntime "github.com/Skarlso/service-provider-ocm/pkg/runtime"
 

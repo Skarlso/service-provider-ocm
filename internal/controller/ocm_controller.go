@@ -27,10 +27,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	apiv1alpha1 "github.com/Skarlso/service-provider-ocm/api/v1alpha1"
-	spruntime "github.com/Skarlso/service-provider-ocm/pkg/runtime"
 	"github.com/openmcp-project/controller-utils/pkg/clusters"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+
+	apiv1alpha1 "github.com/Skarlso/service-provider-ocm/api/v1alpha1"
+	spruntime "github.com/Skarlso/service-provider-ocm/pkg/runtime"
 )
 
 // OCMReconciler reconciles a OCM object

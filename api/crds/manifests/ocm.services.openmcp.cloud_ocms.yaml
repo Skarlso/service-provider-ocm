@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.18.0
+    controller-gen.kubebuilder.io/version: v0.19.0
   labels:
     openmcp.cloud/cluster: onboarding
   name: ocms.ocm.services.openmcp.cloud
@@ -49,8 +49,8 @@ spec:
             description: spec defines the desired state of OCM
             properties:
               foo:
-                description: foo is an example field of OCM. Edit ocm_types.go
-                  to remove/update
+                description: foo is an example field of OCM. Edit ocm_types.go to
+                  remove/update
                 type: string
             type: object
           status:
