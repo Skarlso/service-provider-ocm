@@ -43,6 +43,19 @@ func StatusReady(obj ServiceProviderAPI) {
 	obj.SetPhase(StatusPhaseReady)
 }
 
+// StatusFailed indicates ready with ready true
+func StatusFailed(obj ServiceProviderAPI, msg string) {
+	meta.SetStatusCondition(obj.GetConditions(), metav1.Condition{
+		Type:               ServiceProviderConditionReady,
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: obj.GetGeneration(),
+		Reason:             "ReconcileFailed",
+		Message:            msg,
+	})
+	obj.SetObservedGeneration(obj.GetGeneration())
+	obj.SetPhase(StatusPhaseReady)
+}
+
 // StatusTerminating indicates terminating with synced false
 func StatusTerminating(obj ServiceProviderAPI) {
 	meta.SetStatusCondition(obj.GetConditions(), metav1.Condition{

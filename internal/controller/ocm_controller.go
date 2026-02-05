@@ -23,21 +23,26 @@ import (
 	"time"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	"github.com/fluxcd/pkg/apis/meta"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
+	clustersv1alpha1 "github.com/openmcp-project/openmcp-operator/api/clusters/v1alpha1"
+	libutils "github.com/openmcp-project/openmcp-operator/lib/utils"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/openmcp-project/controller-utils/pkg/clusters"
 
 	apiv1alpha1 "github.com/Skarlso/service-provider-ocm/api/v1alpha1"
 	spruntime "github.com/Skarlso/service-provider-ocm/pkg/runtime"
-	"github.com/Skarlso/service-provider-ocm/utils"
 )
 
 const (
-	HelmReleaseName   = "helm-release"
+	// HelmReleaseName is the name of the helm releases. Wow, such comment, much useful.
+	HelmReleaseName = "helm-release"
+	// OCIRepositoryName is the name of the oci repository. Wow, such comment, much useful.
 	OCIRepositoryName = "oci-repository"
 )
 
@@ -53,40 +58,48 @@ type OCMReconciler struct {
 
 // CreateOrUpdate is called on every add or update event
 func (r *OCMReconciler) CreateOrUpdate(ctx context.Context, svcobj *apiv1alpha1.OCM, _ *apiv1alpha1.ProviderConfig, clusters spruntime.ClusterContext) (ctrl.Result, error) {
+	l := logf.FromContext(ctx)
+	l.Info("Reconciling OCM resource", "name", svcobj.Name)
 	spruntime.StatusProgressing(svcobj, "Reconciling", "Reconcile in progress")
 
 	if err := r.createOrUpdateOCIRepository(ctx, clusters); err != nil {
+		spruntime.StatusFailed(svcobj, err.Error())
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile OCI Repository: %w", err)
 	}
-	if err := r.createOrUpdateHelmRelease(ctx, clusters); err != nil {
+	if err := r.createOrUpdateHelmRelease(ctx, svcobj, clusters); err != nil {
+		spruntime.StatusFailed(svcobj, err.Error())
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile HelmRelease: %w", err)
 	}
+
+	l.Info("Done reconciling OCM resource", "name", svcobj.Name)
 
 	spruntime.StatusReady(svcobj)
 	return ctrl.Result{}, nil
 }
 
 // Delete is called on every delete event
-func (r *OCMReconciler) Delete(ctx context.Context, obj *apiv1alpha1.OCM, _ *apiv1alpha1.ProviderConfig, clusters spruntime.ClusterContext) (ctrl.Result, error) {
+func (r *OCMReconciler) Delete(ctx context.Context, obj *apiv1alpha1.OCM, _ *apiv1alpha1.ProviderConfig, _ spruntime.ClusterContext) (ctrl.Result, error) {
 	spruntime.StatusTerminating(obj)
 
 	var objects []client.Object
 	ociRepository := createOciRepository("oci://ghcr.io/open-component-model/charts/ocm-k8s-toolkit", "0.0.0-0a2b7a3")
 	objects = append(objects, ociRepository)
-	helmRelease, err := createHelmRelease(ctx)
+	helmRelease, err := r.createHelmRelease(ctx, obj)
 	if err != nil {
+		spruntime.StatusFailed(obj, err.Error())
 		return ctrl.Result{}, fmt.Errorf("failed to create helm release: %w", err)
 	}
 	objects = append(objects, helmRelease)
 
 	objectsStillExist := false
 	for _, managedObj := range objects {
-		if err := clusters.MCPCluster.Client().Delete(ctx, managedObj); client.IgnoreNotFound(err) != nil {
+		if err := r.PlatformCluster.Client().Delete(ctx, managedObj); client.IgnoreNotFound(err) != nil {
+			spruntime.StatusFailed(obj, err.Error())
 			return ctrl.Result{}, fmt.Errorf("delete object failed: %w", err)
 		}
 		// we ignore any other error because we assume that if deleting worked, getting should not fail with anything other than
 		// not found.
-		if err := clusters.MCPCluster.Client().Get(ctx, client.ObjectKeyFromObject(managedObj), managedObj); err != nil {
+		if err := r.PlatformCluster.Client().Get(ctx, client.ObjectKeyFromObject(managedObj), managedObj); err != nil {
 			objectsStillExist = true
 		}
 	}
@@ -101,14 +114,39 @@ func (r *OCMReconciler) Delete(ctx context.Context, obj *apiv1alpha1.OCM, _ *api
 	return ctrl.Result{}, nil
 }
 
-func (r *OCMReconciler) createOrUpdateOCIRepository(ctx context.Context, clusters spruntime.ClusterContext) error {
+func (r *OCMReconciler) getMcpFluxConfig(ctx context.Context, obj *apiv1alpha1.OCM) (*meta.SecretKeyReference, error) {
+	tenantNamespace, err := libutils.StableMCPNamespace(obj.Name, obj.Namespace)
+	if err != nil {
+		return nil, fmt.Errorf("failed to determine stable namespace for OCM instance: %w", err)
+	}
+
+	// Get MCP AccessRequest to use for Flux
+	mcpAccessRequest := &clustersv1alpha1.AccessRequest{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "ocm--test-mcp--mcp",
+			Namespace: tenantNamespace,
+		},
+	}
+
+	if err := r.PlatformCluster.Client().Get(ctx, client.ObjectKeyFromObject(mcpAccessRequest), mcpAccessRequest); err != nil {
+		return nil, fmt.Errorf("failed to get MCP AccessRequest: %w", err)
+	}
+
+	return &meta.SecretKeyReference{
+		Name: mcpAccessRequest.Status.SecretRef.Name,
+		Key:  "kubeconfig",
+	}, nil
+}
+
+func (r *OCMReconciler) createOrUpdateOCIRepository(ctx context.Context, _ spruntime.ClusterContext) error {
 	ociRepository := createOciRepository("oci://ghcr.io/open-component-model/charts/ocm-k8s-toolkit", "0.0.0-0a2b7a3")
 	managedObj := &sourcev1.OCIRepository{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: ociRepository.Name,
+			Name:      ociRepository.Name,
+			Namespace: ociRepository.Namespace,
 		},
 	}
-	if _, err := ctrl.CreateOrUpdate(ctx, clusters.MCPCluster.Client(), managedObj, func() error {
+	if _, err := ctrl.CreateOrUpdate(ctx, r.PlatformCluster.Client(), managedObj, func() error {
 		managedObj.Spec = ociRepository.Spec
 		return nil
 	}); err != nil {
@@ -118,17 +156,18 @@ func (r *OCMReconciler) createOrUpdateOCIRepository(ctx context.Context, cluster
 	return nil
 }
 
-func (r *OCMReconciler) createOrUpdateHelmRelease(ctx context.Context, clusters spruntime.ClusterContext) error {
-	helmRelease, err := createHelmRelease(ctx)
+func (r *OCMReconciler) createOrUpdateHelmRelease(ctx context.Context, svcobj *apiv1alpha1.OCM, _ spruntime.ClusterContext) error {
+	helmRelease, err := r.createHelmRelease(ctx, svcobj)
 	if err != nil {
 		return fmt.Errorf("failed to create helm release: %w", err)
 	}
 	managedObj := &helmv2.HelmRelease{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: helmRelease.Name,
+			Name:      helmRelease.Name,
+			Namespace: helmRelease.Namespace,
 		},
 	}
-	if _, err := ctrl.CreateOrUpdate(ctx, clusters.MCPCluster.Client(), managedObj, func() error {
+	if _, err := ctrl.CreateOrUpdate(ctx, r.PlatformCluster.Client(), managedObj, func() error {
 		managedObj.Spec = helmRelease.Spec
 		return nil
 	}); err != nil {
@@ -154,10 +193,10 @@ func createOciRepository(url, version string) *sourcev1.OCIRepository {
 	}
 }
 
-func createHelmRelease(ctx context.Context) (*helmv2.HelmRelease, error) {
-	ref := utils.FluxKubeconfigRef(ctx)
-	if ref == nil {
-		return nil, fmt.Errorf("no flux kubeconfig ref found")
+func (r *OCMReconciler) createHelmRelease(ctx context.Context, obj *apiv1alpha1.OCM) (*helmv2.HelmRelease, error) {
+	fluxConfigRef, err := r.getMcpFluxConfig(ctx, obj)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get FluxConfig: %w", err)
 	}
 
 	values := make(map[string]interface{})
@@ -187,8 +226,10 @@ func createHelmRelease(ctx context.Context) (*helmv2.HelmRelease, error) {
 				Name:      OCIRepositoryName,
 				Namespace: metav1.NamespaceDefault,
 			},
-			Values:     &apiextensionsv1.JSON{Raw: content},
-			KubeConfig: ref,
+			Values: &apiextensionsv1.JSON{Raw: content},
+			KubeConfig: &meta.KubeConfigReference{
+				SecretRef: fluxConfigRef,
+			},
 		},
 	}, nil
 }

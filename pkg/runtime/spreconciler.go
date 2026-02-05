@@ -3,17 +3,12 @@ package runtime
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync/atomic"
 	"time"
 
 	"github.com/Skarlso/service-provider-ocm/api/v1alpha1"
-	"github.com/Skarlso/service-provider-ocm/utils"
 	"github.com/openmcp-project/controller-utils/pkg/clusters"
-	clustersv1alpha1 "github.com/openmcp-project/openmcp-operator/api/clusters/v1alpha1"
 	"github.com/openmcp-project/openmcp-operator/lib/clusteraccess"
-	libutils "github.com/openmcp-project/openmcp-operator/lib/utils"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -29,8 +24,6 @@ import (
 )
 
 var controllerName = v1alpha1.GroupVersion.Group
-
-const requestSuffixMCP = "--mcp"
 
 // ServiceProviderReconciler implements any business logic required to manage ServiceProviderAPI objects
 type ServiceProviderReconciler[T ServiceProviderAPI, PC ProviderConfig] interface {
@@ -152,13 +145,7 @@ func (r *SPReconciler[T, PC]) Reconcile(ctx context.Context, req ctrl.Request) (
 		r.updateStatus(ctx, obj, oldObj)
 		return ctrl.Result{}, errors.New("provider config missing")
 	}
-
 	var err error
-	ctx, err = r.setupFluxKubeconfig(ctx, req)
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to setup flux kubeconfig: %w", err)
-	}
-
 	providerConfigCopy := (*providerConfig).DeepCopyObject().(PC)
 	// core crud
 	deleted := !obj.GetDeletionTimestamp().IsZero()
@@ -193,31 +180,31 @@ func (r *SPReconciler[T, PC]) updateStatus(ctx context.Context, newObj T, oldObj
 	}
 }
 
-func (r *SPReconciler[T, PC]) setupFluxKubeconfig(ctx context.Context, req ctrl.Request) (context.Context, error) {
-	tenantNamespace, err := libutils.StableMCPNamespace(req.Name, req.Namespace)
-	if err != nil {
-		return ctx, fmt.Errorf("failed to determine stable namespace for Crossplane instance: %w", err)
-	}
-
-	// Get MCP AccessRequest to use for Flux
-	mcpAccessRequest := &clustersv1alpha1.AccessRequest{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      clusteraccess.StableRequestName(controllerName, req) + requestSuffixMCP,
-			Namespace: tenantNamespace,
-		},
-	}
-
-	if err := r.platformCluster.Client().Get(ctx, client.ObjectKeyFromObject(mcpAccessRequest), mcpAccessRequest); err != nil {
-		return ctx, fmt.Errorf("failed to get MCP AccessRequest: %w", err)
-	}
-
-	secretRef := &corev1.SecretReference{
-		Name:      mcpAccessRequest.Status.SecretRef.Name,
-		Namespace: mcpAccessRequest.Namespace,
-	}
-	ctx = utils.WithFluxKubeconfigRef(ctx, secretRef)
-	return ctx, nil
-}
+//func (r *SPReconciler[T, PC]) setupFluxKubeconfig(ctx context.Context, req ctrl.Request) (context.Context, error) {
+//	tenantNamespace, err := libutils.StableMCPNamespace(req.Name, req.Namespace)
+//	if err != nil {
+//		return ctx, fmt.Errorf("failed to determine stable namespace for OCM instance: %w", err)
+//	}
+//
+//	// Get MCP AccessRequest to use for Flux
+//	mcpAccessRequest := &clustersv1alpha1.AccessRequest{
+//		ObjectMeta: metav1.ObjectMeta{
+//			Name:      "ocm--test-mcp--mcp",
+//			Namespace: tenantNamespace,
+//		},
+//	}
+//
+//	if err := r.platformCluster.Client().Get(ctx, client.ObjectKeyFromObject(mcpAccessRequest), mcpAccessRequest); err != nil {
+//		return ctx, fmt.Errorf("failed to get MCP AccessRequest: %w", err)
+//	}
+//
+//	secretRef := &corev1.SecretReference{
+//		Name:      mcpAccessRequest.Status.SecretRef.Name,
+//		Namespace: mcpAccessRequest.Namespace,
+//	}
+//	ctx = utils.WithFluxKubeconfigRef(ctx, secretRef)
+//	return ctx, nil
+//}
 
 // delete eventually invokes the domain delete logic of a service provider and is the place to implement
 // common logic that should be abstracted away from a service provider developer like handling cluster access.
@@ -241,6 +228,12 @@ func (r *SPReconciler[T, PC]) delete(ctx context.Context, obj T, pc PC) (ctrl.Re
 			StatusProgressing(obj, "Reconciling", "clusters being setup")
 			return res, nil
 		}
+
+		//ctx, err = r.setupFluxKubeconfig(ctx, req)
+		//if err != nil {
+		//	return ctrl.Result{}, fmt.Errorf("failed to setup flux kubeconfig: %w", err)
+		//}
+
 		res, err = r.serviceProviderReconciler.Delete(ctx, obj, pc, clusters)
 		r.updateStatus(ctx, obj, oldObj)
 		if err != nil {
@@ -284,6 +277,12 @@ func (r *SPReconciler[T, PC]) createOrUpdate(ctx context.Context, obj T, pc PC) 
 	if res.RequeueAfter > 0 {
 		return res, nil
 	}
+
+	//ctx, err = r.setupFluxKubeconfig(ctx, req)
+	//if err != nil {
+	//	return ctrl.Result{}, fmt.Errorf("failed to setup flux kubeconfig: %w", err)
+	//}
+
 	return r.serviceProviderReconciler.CreateOrUpdate(ctx, obj, pc, clusters)
 }
 

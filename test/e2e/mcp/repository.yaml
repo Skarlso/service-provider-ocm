@@ -1,0 +1,11 @@
+apiVersion: delivery.ocm.software/v1alpha1
+kind: Repository
+metadata:
+  name: platform-mesh
+  namespace: default
+spec:
+  interval: 1m
+  repositorySpec:
+    baseUrl: ghcr.io
+    type: OCIRegistry
+    subPath: platform-mesh
