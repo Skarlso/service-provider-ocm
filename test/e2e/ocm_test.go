@@ -5,6 +5,9 @@ import (
 	"testing"
 	"time"
 
+	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	sourcev1 "github.com/fluxcd/source-controller/api/v1"
+	libutils "github.com/openmcp-project/openmcp-operator/lib/utils"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/e2e-framework/klient/wait"
@@ -18,6 +21,7 @@ import (
 )
 
 func TestServiceProvider(t *testing.T) {
+	// TODO: Install Flux.
 	var onboardingList unstructured.UnstructuredList
 	basicProviderTest := features.New("provider test").
 		Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
@@ -49,13 +53,25 @@ func TestServiceProvider(t *testing.T) {
 			},
 		). // Add Assess to verify that helmRelese and Oci Repo are Ready.
 		Assess("verify that helm release and oci repository are ready", func(ctx context.Context, t *testing.T, config *envconf.Config) context.Context {
-			if err := wait.For(func(ctx context.Context) (done bool, err error) {
-				// TODO: Somehow get the tenant namespace here to test for the objects.
-				//time.Sleep(5 * time.Minute)
+			tenantNamespace, err := libutils.StableMCPNamespace("test-mcp", "default")
+			if err != nil {
+				t.Errorf("failed to get tenant namespace: %v", err)
+				return ctx
+			}
 
-				return true, nil
-			}); err != nil {
-				t.Error(err)
+			helmRelease := &helmv2.HelmRelease{}
+			helmRelease.SetName("helm-release")
+			helmRelease.SetNamespace(tenantNamespace)
+
+			ociRepo := &sourcev1.OCIRepository{}
+			ociRepo.SetName("oci-repository")
+			ociRepo.SetNamespace(tenantNamespace)
+
+			if err := wait.For(conditions.Match(helmRelease, config, "Ready", corev1.ConditionTrue), wait.WithTimeout(2*time.Minute)); err != nil {
+				t.Errorf("HelmRelease not ready: %v", err)
+			}
+			if err := wait.For(conditions.Match(ociRepo, config, "Ready", corev1.ConditionTrue), wait.WithTimeout(2*time.Minute)); err != nil {
+				t.Errorf("OCIRepository not ready: %v", err)
 			}
 
 			return ctx
