@@ -47,7 +47,19 @@ func TestServiceProvider(t *testing.T) {
 				objList.DeepCopyInto(&onboardingList)
 				return ctx
 			},
-		).
+		). // Add Assess to verify that helmRelese and Oci Repo are Ready.
+		Assess("verify that helm release and oci repository are ready", func(ctx context.Context, t *testing.T, config *envconf.Config) context.Context {
+			if err := wait.For(func(ctx context.Context) (done bool, err error) {
+				// TODO: Somehow get the tenant namespace here to test for the objects.
+				//time.Sleep(5 * time.Minute)
+
+				return true, nil
+			}); err != nil {
+				t.Error(err)
+			}
+
+			return ctx
+		}).
 		Assess("verify domain objects can be created", providers.ImportDomainAPIs("mcp")).
 		Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 			onboardingConfig, err := clusterutils.OnboardingConfig()

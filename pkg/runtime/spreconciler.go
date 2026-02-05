@@ -277,7 +277,6 @@ func (r *SPReconciler[T, PC]) createOrUpdate(ctx context.Context, obj T, pc PC) 
 	if res.RequeueAfter > 0 {
 		return res, nil
 	}
-
 	//ctx, err = r.setupFluxKubeconfig(ctx, req)
 	//if err != nil {
 	//	return ctrl.Result{}, fmt.Errorf("failed to setup flux kubeconfig: %w", err)
