@@ -34,6 +34,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/openmcp-project/controller-utils/pkg/clusters"
+	"github.com/openmcp-project/openmcp-operator/lib/clusteraccess"
 
 	apiv1alpha1 "github.com/Skarlso/service-provider-ocm/api/v1alpha1"
 	spruntime "github.com/Skarlso/service-provider-ocm/pkg/runtime"
@@ -44,6 +45,8 @@ const (
 	HelmReleaseName = "helm-release"
 	// OCIRepositoryName is the name of the oci repository. Wow, such comment, much useful.
 	OCIRepositoryName = "oci-repository"
+	clusterAccessName = "OCM"
+	requestSuffixMCP  = "--mcp"
 )
 
 // OCMReconciler reconciles a OCM object
@@ -72,7 +75,7 @@ func (r *OCMReconciler) CreateOrUpdate(ctx context.Context, svcobj *apiv1alpha1.
 		spruntime.StatusFailed(svcobj, err.Error())
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile OCI Repository: %w", err)
 	}
-	if err := r.createOrUpdateHelmRelease(ctx, tenantNamespace); err != nil {
+	if err := r.createOrUpdateHelmRelease(ctx, tenantNamespace, svcobj.Name); err != nil {
 		spruntime.StatusFailed(svcobj, err.Error())
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile HelmRelease: %w", err)
 	}
@@ -95,7 +98,7 @@ func (r *OCMReconciler) Delete(ctx context.Context, obj *apiv1alpha1.OCM, _ *api
 	var objects []client.Object
 	ociRepository := createOciRepository("oci://ghcr.io/open-component-model/charts/ocm-k8s-toolkit", "0.0.0-0a2b7a3", tenantNamespace)
 	objects = append(objects, ociRepository)
-	helmRelease, err := r.createHelmRelease(ctx, tenantNamespace)
+	helmRelease, err := r.createHelmRelease(ctx, tenantNamespace, obj.Name)
 	if err != nil {
 		spruntime.StatusFailed(obj, err.Error())
 		return ctrl.Result{}, fmt.Errorf("failed to create helm release: %w", err)
@@ -125,11 +128,17 @@ func (r *OCMReconciler) Delete(ctx context.Context, obj *apiv1alpha1.OCM, _ *api
 	return ctrl.Result{}, nil
 }
 
-func (r *OCMReconciler) getMcpFluxConfig(ctx context.Context, namespace string) (*meta.SecretKeyReference, error) {
-	// Get MCP AccessRequest to use for Flux
+func (r *OCMReconciler) getMcpFluxConfig(ctx context.Context, namespace, objectName string) (*meta.SecretKeyReference, error) {
+	// TODO: There is something incorrect here, because the providers use
+	// controllerName = v1alpha1.GroupVersion.Group which ends up as something like this:
+	// `ocm.services.openmcp.cloud--test-mcp`
+	//  But for us its:
+	// `ocm--test-mcp--mcp`
+	// The group is not in the secret for the access request that has been created and I don't why.
+	// It's outside of this controller. Talk with Maximilian Techritz to figure out why. :)
 	mcpAccessRequest := &clustersv1alpha1.AccessRequest{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ocm--test-mcp--mcp",
+			Name:      clusteraccess.StableRequestNameFromLocalName(clusterAccessName, objectName) + requestSuffixMCP,
 			Namespace: namespace,
 		},
 	}
@@ -164,8 +173,8 @@ func (r *OCMReconciler) createOrUpdateOCIRepository(ctx context.Context, _ sprun
 	return nil
 }
 
-func (r *OCMReconciler) createOrUpdateHelmRelease(ctx context.Context, namespace string) error {
-	helmRelease, err := r.createHelmRelease(ctx, namespace)
+func (r *OCMReconciler) createOrUpdateHelmRelease(ctx context.Context, namespace, objectName string) error {
+	helmRelease, err := r.createHelmRelease(ctx, namespace, objectName)
 	if err != nil {
 		return fmt.Errorf("failed to create helm release: %w", err)
 	}
@@ -203,8 +212,8 @@ func createOciRepository(url, version, namespace string) *sourcev1.OCIRepository
 	}
 }
 
-func (r *OCMReconciler) createHelmRelease(ctx context.Context, namespace string) (*helmv2.HelmRelease, error) {
-	fluxConfigRef, err := r.getMcpFluxConfig(ctx, namespace)
+func (r *OCMReconciler) createHelmRelease(ctx context.Context, namespace, objectName string) (*helmv2.HelmRelease, error) {
+	fluxConfigRef, err := r.getMcpFluxConfig(ctx, namespace, objectName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get FluxConfig: %w", err)
 	}
