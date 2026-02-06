@@ -45,9 +45,10 @@ const (
 	HelmReleaseName = "helm-release"
 	// OCIRepositoryName is the name of the oci repository. Wow, such comment, much useful.
 	OCIRepositoryName = "oci-repository"
-	clusterAccessName = "OCM"
 	requestSuffixMCP  = "--mcp"
 )
+
+var clusterAccessName = apiv1alpha1.GroupVersion.Group
 
 // OCMReconciler reconciles a OCM object
 type OCMReconciler struct {
@@ -129,13 +130,6 @@ func (r *OCMReconciler) Delete(ctx context.Context, obj *apiv1alpha1.OCM, _ *api
 }
 
 func (r *OCMReconciler) getMcpFluxConfig(ctx context.Context, namespace, objectName string) (*meta.SecretKeyReference, error) {
-	// TODO: There is something incorrect here, because the providers use
-	// controllerName = v1alpha1.GroupVersion.Group which ends up as something like this:
-	// `ocm.services.openmcp.cloud--test-mcp`
-	//  But for us its:
-	// `ocm--test-mcp--mcp`
-	// The group is not in the secret for the access request that has been created and I don't why.
-	// It's outside of this controller. Talk with Maximilian Techritz to figure out why. :)
 	mcpAccessRequest := &clustersv1alpha1.AccessRequest{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      clusteraccess.StableRequestNameFromLocalName(clusterAccessName, objectName) + requestSuffixMCP,

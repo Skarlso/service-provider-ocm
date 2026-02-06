@@ -326,7 +326,8 @@ func main() {
 			PlatformCluster:   platformCluster,
 			PodNamespace:      podNamespace,
 		}).
-		WithClusterAccessReconciler(clusteraccess.NewClusterAccessReconciler(platformCluster.Client(), "OCM").
+		// The name here for the controller is quite important as it will result in the generated name for access requests and secrets.
+		WithClusterAccessReconciler(clusteraccess.NewClusterAccessReconciler(platformCluster.Client(), "ocm.services.openmcp.cloud").
 			WithMCPScheme(mcpScheme).
 			WithWorkloadScheme(workloadScheme).
 			WithRetryInterval(10 * time.Second).
