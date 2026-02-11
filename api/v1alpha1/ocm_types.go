@@ -20,26 +20,16 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-
 // OCMSpec defines the desired state of OCM
 type OCMSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-	// The following markers will use OpenAPI v3 schema to validate the value
-	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
-
-	// foo is an example field of OCM. Edit ocm_types.go to remove/update
-	// +optional
-	Foo *string `json:"foo,omitempty"`
+	// URL defines the url from where to fetch the helm charts to install the ocm-k8s-toolkit.
+	URL string `json:"url"`
+	// Version defines the version to fetch.
+	Version string `json:"version"`
 }
 
 // OCMStatus defines the observed state of OCM.
 type OCMStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
 	// For Kubernetes API conventions, see:
 	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
 

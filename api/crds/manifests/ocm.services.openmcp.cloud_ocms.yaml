@@ -48,10 +48,16 @@ spec:
           spec:
             description: spec defines the desired state of OCM
             properties:
-              foo:
-                description: foo is an example field of OCM. Edit ocm_types.go to
-                  remove/update
+              url:
+                description: URL defines the url from where to fetch the helm charts
+                  to install the ocm-k8s-toolkit.
                 type: string
+              version:
+                description: Version defines the version to fetch.
+                type: string
+            required:
+            - url
+            - version
             type: object
           status:
             description: status defines the observed state of OCM

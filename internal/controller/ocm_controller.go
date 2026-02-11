@@ -72,7 +72,7 @@ func (r *OCMReconciler) CreateOrUpdate(ctx context.Context, svcobj *apiv1alpha1.
 
 	l.Info("checking tenantNamespace", "namespace", tenantNamespace)
 
-	if err := r.createOrUpdateOCIRepository(ctx, clusters, tenantNamespace); err != nil {
+	if err := r.createOrUpdateOCIRepository(ctx, svcobj, clusters, tenantNamespace); err != nil {
 		spruntime.StatusFailed(svcobj, err.Error())
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile OCI Repository: %w", err)
 	}
@@ -147,8 +147,8 @@ func (r *OCMReconciler) getMcpFluxConfig(ctx context.Context, namespace, objectN
 	}, nil
 }
 
-func (r *OCMReconciler) createOrUpdateOCIRepository(ctx context.Context, _ spruntime.ClusterContext, namespace string) error {
-	ociRepository := createOciRepository("oci://ghcr.io/open-component-model/charts/ocm-k8s-toolkit", "0.0.0-0a2b7a3", namespace)
+func (r *OCMReconciler) createOrUpdateOCIRepository(ctx context.Context, svcobj *apiv1alpha1.OCM, _ spruntime.ClusterContext, namespace string) error {
+	ociRepository := createOciRepository(svcobj.Spec.URL, svcobj.Spec.Version, namespace)
 	managedObj := &sourcev1.OCIRepository{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ociRepository.Name,
