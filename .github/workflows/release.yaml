@@ -1,7 +1,9 @@
 name: Versioned Release
 
 on:
-  workflow_call:
+  push:
+    branches:
+      - main
 
 permissions:
   contents: write # we need this to be able to push tags

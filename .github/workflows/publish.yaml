@@ -1,7 +1,10 @@
 name: Publish
 
 on:
-  workflow_call:
+  push:
+    tags:
+      - v*
+  workflow_dispatch:
 
 permissions:
   packages: write
