@@ -32,4 +32,7 @@ tasks:
     desc: "Build image and run e2e tests"
     cmds:
       - task: build:img:build-test
-      - go test -v ./test/e2e/... -count=1
+      - VERSION={{.VERSION}} go test -v ./test/e2e/... -count=1
+    vars:
+      VERSION:
+        sh: hack/common/get-version.sh

@@ -39,7 +39,7 @@ func TestMain(m *testing.M) {
 		ServiceProviders: []providers.ServiceProviderSetup{
 			{
 				Name:  "ocm",
-				Image: "ghcr.io/openmcp-project/images/service-provider-ocm:0.0.1",
+				Image: "ghcr.io/open-component-model/images/service-provider-ocm:" + os.Getenv("VERSION"),
 			},
 		},
 	}
