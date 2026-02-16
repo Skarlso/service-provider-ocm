@@ -1,0 +1,121 @@
+name: Versioned Release
+
+on:
+  workflow_call:
+
+permissions:
+  contents: write # we need this to be able to push tags
+  pull-requests: read
+
+jobs:
+  release_tag:
+    name: Release version
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Create GitHub App token
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2
+        id: app-token
+        with:
+          # required
+          app-id: ${{ secrets.OCMBOT_APP_ID }}
+          private-key: ${{ secrets.OCMBOT_PRIV_KEY }}
+
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          fetch-tags: true
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Set up Go
+        uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6
+        with:
+          go-version-file: go.mod
+
+      - name: test-action
+        run: cd hack/common; git status
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read and validate VERSION
+        id: version
+        run: |
+          VERSION=$(task version)
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-dev(-[0-9a-f]*)?)?$ ]]; then
+            echo "Invalid version format: $VERSION"
+            exit 1
+          fi
+          echo "New version: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_ENV
+
+      - name: Skip release if version is a dev version
+        if: contains(env.version, '-dev')
+        run: |
+          echo "Skipping development version release: ${{ env.version }}"
+          echo "SKIP=true" >> $GITHUB_ENV
+          exit 0
+
+      - name: Check if VERSION is already tagged
+        id: check_tag
+        run: |
+          if git rev-parse "refs/tags/${{ env.version }}" >/dev/null 2>&1; then
+            echo "Tag ${{ env.version }} already exists. Skipping release."
+            echo "SKIP=true" >> $GITHUB_ENV
+            exit 0
+          fi
+          echo "Tag ${{ env.version }} doesn't exists. Proceeding with release."
+
+      - name: Create Git tag
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          AUTHOR_NAME=$(git log -1 --pretty=format:'%an')
+          AUTHOR_EMAIL=$(git log -1 --pretty=format:'%ae')
+          echo "Tagging as $AUTHOR_NAME <$AUTHOR_EMAIL>"
+
+          echo "AUTHOR_NAME=$AUTHOR_NAME" >> $GITHUB_ENV
+          echo "AUTHOR_EMAIL=$AUTHOR_EMAIL" >> $GITHUB_ENV
+
+          git config user.name "$AUTHOR_NAME"
+          git config user.email "$AUTHOR_EMAIL"
+
+          git tag -a "${{ env.version }}" -m "Release ${{ env.version }}"
+          git push origin "${{ env.version }}"
+
+          NESTED_GO_MODULES="$(task release:list-nested-modules)"
+
+          for MODULE in $NESTED_GO_MODULES; do
+            git tag -a "${MODULE}/${{ env.version }}" -m "Release ${{ env.version }}"
+            git push origin "${MODULE}/${{ env.version }}"
+          done
+
+      - name: Build Changelog
+        id: github_release
+        run: task r:generate-changelog
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create GitHub release
+        if: ${{ env.SKIP != 'true' }}
+        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2
+        with:
+          tag_name: ${{ env.version }}
+          name: Release ${{ env.version }}
+          body_path: ./CHANGELOG.md
+          draft: true
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push dev VERSION
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          task release:set-version --verbose -- "${{ env.version }}-dev"
+          git config user.name "${{ env.AUTHOR_NAME }}"
+          git config user.email "${{ env.AUTHOR_EMAIL }}"
+          git add VERSION
+          git commit -m "chore(release): Update VERSION to ${{ env.version }}-dev"
+          git push origin main
