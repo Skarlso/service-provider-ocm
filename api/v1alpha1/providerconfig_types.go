@@ -22,21 +22,50 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-
 // ProviderConfigSpec defines the desired state of ProviderConfig
 type ProviderConfigSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-	// The following markers will use OpenAPI v3 schema to validate the value
-	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
-
-	// foo is an example field of ProviderConfig. Edit providerconfig_types.go to remove/update
 	// +optional
 	// +kubebuilder:default:="1m"
 	// +kubebuilder:validation:Format=duration
 	PollInterval *metav1.Duration `json:"pollInterval,omitempty"`
+
+	// +optional
+	HelmConfig *HelmConfig `json:"helmConfig,omitempty"`
+}
+
+// HelmConfig configures Helm install and upgrade behavior for managed HelmReleases.
+type HelmConfig struct {
+	// +optional
+	Install *HelmInstallConfig `json:"install,omitempty"`
+	// +optional
+	Upgrade *HelmUpgradeConfig `json:"upgrade,omitempty"`
+}
+
+// HelmInstallConfig configures Helm install actions.
+type HelmInstallConfig struct {
+	// +optional
+	// +kubebuilder:validation:Enum=Skip;Create;CreateReplace
+	CRDs *string `json:"crds,omitempty"`
+	// +optional
+	Retries *int `json:"retries,omitempty"`
+	// +optional
+	CreateNamespace *bool `json:"createNamespace,omitempty"`
+}
+
+// HelmUpgradeConfig configures Helm upgrade actions.
+type HelmUpgradeConfig struct {
+	// +optional
+	// +kubebuilder:validation:Enum=Skip;Create;CreateReplace
+	CRDs *string `json:"crds,omitempty"`
+	// +optional
+	Retries *int `json:"retries,omitempty"`
+	// +optional
+	CleanupOnFail *bool `json:"cleanupOnFail,omitempty"`
+	// +optional
+	Force *bool `json:"force,omitempty"`
+	// +optional
+	// +kubebuilder:validation:Enum=rollback;uninstall
+	RemediationStrategy *string `json:"remediationStrategy,omitempty"`
 }
 
 // ProviderConfigStatus defines the observed state of ProviderConfig.

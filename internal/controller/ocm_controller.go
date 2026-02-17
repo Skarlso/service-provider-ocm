@@ -61,7 +61,7 @@ type OCMReconciler struct {
 }
 
 // CreateOrUpdate is called on every add or update event
-func (r *OCMReconciler) CreateOrUpdate(ctx context.Context, svcobj *apiv1alpha1.OCM, _ *apiv1alpha1.ProviderConfig, clusters spruntime.ClusterContext) (ctrl.Result, error) {
+func (r *OCMReconciler) CreateOrUpdate(ctx context.Context, svcobj *apiv1alpha1.OCM, providerConfig *apiv1alpha1.ProviderConfig, clusters spruntime.ClusterContext) (ctrl.Result, error) {
 	l := logf.FromContext(ctx)
 	l.Info("Reconciling OCM resource", "name", svcobj.Name)
 	spruntime.StatusProgressing(svcobj, "Reconciling", "Reconcile in progress")
@@ -76,7 +76,7 @@ func (r *OCMReconciler) CreateOrUpdate(ctx context.Context, svcobj *apiv1alpha1.
 		spruntime.StatusFailed(svcobj, err.Error())
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile OCI Repository: %w", err)
 	}
-	if err := r.createOrUpdateHelmRelease(ctx, tenantNamespace, svcobj.Name); err != nil {
+	if err := r.createOrUpdateHelmRelease(ctx, tenantNamespace, svcobj.Name, providerConfig); err != nil {
 		spruntime.StatusFailed(svcobj, err.Error())
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile HelmRelease: %w", err)
 	}
@@ -88,7 +88,7 @@ func (r *OCMReconciler) CreateOrUpdate(ctx context.Context, svcobj *apiv1alpha1.
 }
 
 // Delete is called on every delete event
-func (r *OCMReconciler) Delete(ctx context.Context, obj *apiv1alpha1.OCM, _ *apiv1alpha1.ProviderConfig, _ spruntime.ClusterContext) (ctrl.Result, error) {
+func (r *OCMReconciler) Delete(ctx context.Context, obj *apiv1alpha1.OCM, providerConfig *apiv1alpha1.ProviderConfig, _ spruntime.ClusterContext) (ctrl.Result, error) {
 	spruntime.StatusTerminating(obj)
 
 	tenantNamespace, err := libutils.StableMCPNamespace(obj.Name, obj.Namespace)
@@ -99,7 +99,7 @@ func (r *OCMReconciler) Delete(ctx context.Context, obj *apiv1alpha1.OCM, _ *api
 	var objects []client.Object
 	ociRepository := createOciRepository(obj.Spec.URL, obj.Spec.Version, tenantNamespace)
 	objects = append(objects, ociRepository)
-	helmRelease, err := r.createHelmRelease(ctx, tenantNamespace, obj.Name)
+	helmRelease, err := r.createHelmRelease(ctx, tenantNamespace, obj.Name, providerConfig)
 	if err != nil {
 		spruntime.StatusFailed(obj, err.Error())
 		return ctrl.Result{}, fmt.Errorf("failed to create helm release: %w", err)
@@ -167,8 +167,8 @@ func (r *OCMReconciler) createOrUpdateOCIRepository(ctx context.Context, svcobj 
 	return nil
 }
 
-func (r *OCMReconciler) createOrUpdateHelmRelease(ctx context.Context, namespace, objectName string) error {
-	helmRelease, err := r.createHelmRelease(ctx, namespace, objectName)
+func (r *OCMReconciler) createOrUpdateHelmRelease(ctx context.Context, namespace, objectName string, providerConfig *apiv1alpha1.ProviderConfig) error {
+	helmRelease, err := r.createHelmRelease(ctx, namespace, objectName, providerConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create helm release: %w", err)
 	}
@@ -206,18 +206,18 @@ func createOciRepository(url, version, namespace string) *sourcev1.OCIRepository
 	}
 }
 
-func (r *OCMReconciler) createHelmRelease(ctx context.Context, namespace, objectName string) (*helmv2.HelmRelease, error) {
+func (r *OCMReconciler) createHelmRelease(ctx context.Context, namespace, objectName string, providerConfig *apiv1alpha1.ProviderConfig) (*helmv2.HelmRelease, error) {
 	fluxConfigRef, err := r.getMcpFluxConfig(ctx, namespace, objectName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get FluxConfig: %w", err)
 	}
 
-	values := make(map[string]interface{})
-	values["manager"] = map[string]interface{}{
-		"concurrency": map[string]interface{}{
+	values := make(map[string]any)
+	values["manager"] = map[string]any{
+		"concurrency": map[string]any{
 			"resource": 21,
 		},
-		"logging": map[string]interface{}{
+		"logging": map[string]any{
 			"level": "debug",
 		},
 	}
@@ -225,6 +225,8 @@ func (r *OCMReconciler) createHelmRelease(ctx context.Context, namespace, object
 	if err != nil {
 		return nil, err
 	}
+
+	install, upgrade := buildHelmActions(providerConfig)
 
 	return &helmv2.HelmRelease{
 		ObjectMeta: metav1.ObjectMeta{
@@ -235,6 +237,8 @@ func (r *OCMReconciler) createHelmRelease(ctx context.Context, namespace, object
 			Interval:         metav1.Duration{Duration: time.Minute},
 			TargetNamespace:  metav1.NamespaceDefault,
 			StorageNamespace: metav1.NamespaceDefault,
+			Install:          install,
+			Upgrade:          upgrade,
 			ChartRef: &helmv2.CrossNamespaceSourceReference{
 				Kind:      "OCIRepository",
 				Name:      OCIRepositoryName,
@@ -246,4 +250,77 @@ func (r *OCMReconciler) createHelmRelease(ctx context.Context, namespace, object
 			},
 		},
 	}, nil
+}
+
+func buildHelmActions(providerConfig *apiv1alpha1.ProviderConfig) (*helmv2.Install, *helmv2.Upgrade) {
+	var helmConfig *apiv1alpha1.HelmConfig
+	if providerConfig != nil {
+		helmConfig = providerConfig.Spec.HelmConfig
+	}
+
+	return buildInstall(helmConfig), buildUpgrade(helmConfig)
+}
+
+func buildInstall(cfg *apiv1alpha1.HelmConfig) *helmv2.Install {
+	crds := helmv2.Create
+	retries := 3
+	createNamespace := true
+
+	if cfg != nil && cfg.Install != nil {
+		ic := cfg.Install
+		if ic.CRDs != nil {
+			crds = helmv2.CRDsPolicy(*ic.CRDs)
+		}
+		if ic.Retries != nil {
+			retries = *ic.Retries
+		}
+		if ic.CreateNamespace != nil {
+			createNamespace = *ic.CreateNamespace
+		}
+	}
+
+	return &helmv2.Install{
+		CRDs:            crds,
+		CreateNamespace: createNamespace,
+		Remediation: &helmv2.InstallRemediation{
+			Retries: retries,
+		},
+	}
+}
+
+func buildUpgrade(cfg *apiv1alpha1.HelmConfig) *helmv2.Upgrade {
+	crds := helmv2.CreateReplace
+	retries := 3
+	cleanupOnFail := true
+	force := false
+	remediationStrategy := helmv2.RollbackRemediationStrategy
+
+	if cfg != nil && cfg.Upgrade != nil {
+		uc := cfg.Upgrade
+		if uc.CRDs != nil {
+			crds = helmv2.CRDsPolicy(*uc.CRDs)
+		}
+		if uc.Retries != nil {
+			retries = *uc.Retries
+		}
+		if uc.CleanupOnFail != nil {
+			cleanupOnFail = *uc.CleanupOnFail
+		}
+		if uc.Force != nil {
+			force = *uc.Force
+		}
+		if uc.RemediationStrategy != nil {
+			remediationStrategy = helmv2.RemediationStrategy(*uc.RemediationStrategy)
+		}
+	}
+
+	return &helmv2.Upgrade{
+		CRDs:          crds,
+		CleanupOnFail: cleanupOnFail,
+		Force:         force,
+		Remediation: &helmv2.UpgradeRemediation{
+			Retries:  retries,
+			Strategy: &remediationStrategy,
+		},
+	}
 }

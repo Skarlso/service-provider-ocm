@@ -41,10 +41,48 @@ spec:
           spec:
             description: spec defines the desired state of ProviderConfig
             properties:
+              helmConfig:
+                description: HelmConfig configures Helm install and upgrade behavior
+                  for managed HelmReleases.
+                properties:
+                  install:
+                    description: HelmInstallConfig configures Helm install actions.
+                    properties:
+                      crds:
+                        enum:
+                        - Skip
+                        - Create
+                        - CreateReplace
+                        type: string
+                      createNamespace:
+                        type: boolean
+                      retries:
+                        type: integer
+                    type: object
+                  upgrade:
+                    description: HelmUpgradeConfig configures Helm upgrade actions.
+                    properties:
+                      cleanupOnFail:
+                        type: boolean
+                      crds:
+                        enum:
+                        - Skip
+                        - Create
+                        - CreateReplace
+                        type: string
+                      force:
+                        type: boolean
+                      remediationStrategy:
+                        enum:
+                        - rollback
+                        - uninstall
+                        type: string
+                      retries:
+                        type: integer
+                    type: object
+                type: object
               pollInterval:
                 default: 1m
-                description: foo is an example field of ProviderConfig. Edit providerconfig_types.go
-                  to remove/update
                 format: duration
                 type: string
             type: object
