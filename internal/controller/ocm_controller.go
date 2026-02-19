@@ -28,7 +28,6 @@ import (
 	clustersv1alpha1 "github.com/openmcp-project/openmcp-operator/api/clusters/v1alpha1"
 	libutils "github.com/openmcp-project/openmcp-operator/lib/utils"
 	corev1 "k8s.io/api/core/v1"
-	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -42,13 +41,17 @@ import (
 )
 
 const (
-	// HelmReleaseName is the name of the helm releases. Wow, such comment, much useful.
+	// HelmReleaseName is the name of the helmRelease object created for the controller.
 	HelmReleaseName = "helm-release"
-	// OCIRepositoryName is the name of the oci repository. Wow, such comment, much useful.
+	// OCIRepositoryName is the name of the oci repository object pointing to the helm chart of the controller.
 	OCIRepositoryName = "oci-repository"
-	requestSuffixMCP  = "--mcp"
+	// OcmSystemNamespace is the default namespace on the target cluster to use to install the ocm-k8s-toolkit controller into.
+	OcmSystemNamespace = "ocm-system"
+	// requestSuffixMCP is the suffix used for the mcp cluster.
+	requestSuffixMCP = "--mcp"
 )
 
+// clusterAccessName is the name of the access object containing the kubeconfig for the mcp target cluster.
 var clusterAccessName = apiv1alpha1.GroupVersion.Group
 
 // OCMReconciler reconciles a OCM object
@@ -82,7 +85,7 @@ func (r *OCMReconciler) CreateOrUpdate(ctx context.Context, svcobj *apiv1alpha1.
 		spruntime.StatusFailed(svcobj, err.Error())
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile OCI Repository: %w", err)
 	}
-	if err := r.createOrUpdateHelmRelease(ctx, tenantNamespace, svcobj.Name, providerConfig); err != nil {
+	if err := r.createOrUpdateHelmRelease(ctx, tenantNamespace, svcobj, providerConfig); err != nil {
 		spruntime.StatusFailed(svcobj, err.Error())
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile HelmRelease: %w", err)
 	}
@@ -103,9 +106,9 @@ func (r *OCMReconciler) Delete(ctx context.Context, obj *apiv1alpha1.OCM, provid
 	}
 
 	var objects []client.Object
-	ociRepository := createOciRepository(obj.Spec.URL, obj.Spec.Version, tenantNamespace, providerConfig)
+	ociRepository := createOciRepository(providerConfig, obj.Spec.Version, tenantNamespace)
 	objects = append(objects, ociRepository)
-	helmRelease, err := r.createHelmRelease(ctx, tenantNamespace, obj.Name, providerConfig)
+	helmRelease, err := r.createHelmRelease(ctx, tenantNamespace, obj, providerConfig)
 	if err != nil {
 		spruntime.StatusFailed(obj, err.Error())
 		return ctrl.Result{}, fmt.Errorf("failed to create helm release: %w", err)
@@ -154,11 +157,10 @@ func (r *OCMReconciler) getMcpFluxConfig(ctx context.Context, namespace, objectN
 }
 
 func (r *OCMReconciler) replicateImagePullSecret(ctx context.Context, providerConfig *apiv1alpha1.ProviderConfig, targetNamespace string) error {
-	if providerConfig == nil || providerConfig.Spec.ImagePullSecret == nil {
+	ref := providerConfig.GetImagePullSecret()
+	if ref == nil {
 		return nil
 	}
-
-	ref := providerConfig.Spec.ImagePullSecret
 	platformClient := r.PlatformCluster.Client()
 
 	sourceSecret := &corev1.Secret{}
@@ -185,7 +187,7 @@ func (r *OCMReconciler) replicateImagePullSecret(ctx context.Context, providerCo
 }
 
 func (r *OCMReconciler) createOrUpdateOCIRepository(ctx context.Context, svcobj *apiv1alpha1.OCM, _ spruntime.ClusterContext, namespace string, providerConfig *apiv1alpha1.ProviderConfig) error {
-	ociRepository := createOciRepository(svcobj.Spec.URL, svcobj.Spec.Version, namespace, providerConfig)
+	ociRepository := createOciRepository(providerConfig, svcobj.Spec.Version, namespace)
 	managedObj := &sourcev1.OCIRepository{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ociRepository.Name,
@@ -204,8 +206,8 @@ func (r *OCMReconciler) createOrUpdateOCIRepository(ctx context.Context, svcobj 
 	return nil
 }
 
-func (r *OCMReconciler) createOrUpdateHelmRelease(ctx context.Context, namespace, objectName string, providerConfig *apiv1alpha1.ProviderConfig) error {
-	helmRelease, err := r.createHelmRelease(ctx, namespace, objectName, providerConfig)
+func (r *OCMReconciler) createOrUpdateHelmRelease(ctx context.Context, namespace string, svcobj *apiv1alpha1.OCM, providerConfig *apiv1alpha1.ProviderConfig) error {
+	helmRelease, err := r.createHelmRelease(ctx, namespace, svcobj, providerConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create helm release: %w", err)
 	}
@@ -234,17 +236,10 @@ func ensureOCIScheme(url string) string {
 	return url
 }
 
-func createOciRepository(url, version, namespace string, providerConfig *apiv1alpha1.ProviderConfig) *sourcev1.OCIRepository {
-	interval := metav1.Duration{Duration: time.Minute}
-	if providerConfig != nil && providerConfig.Spec.HelmConfig != nil && providerConfig.Spec.HelmConfig.Interval != nil {
-		interval = *providerConfig.Spec.HelmConfig.Interval
-	}
-
+func createOciRepository(providerConfig *apiv1alpha1.ProviderConfig, version, namespace string) *sourcev1.OCIRepository {
 	var secretRef *meta.LocalObjectReference
-	if providerConfig != nil && providerConfig.Spec.ImagePullSecret != nil {
-		secretRef = &meta.LocalObjectReference{
-			Name: providerConfig.Spec.ImagePullSecret.Name,
-		}
+	if ref := providerConfig.GetImagePullSecret(); ref != nil {
+		secretRef = &meta.LocalObjectReference{Name: ref.Name}
 	}
 
 	return &sourcev1.OCIRepository{
@@ -253,8 +248,8 @@ func createOciRepository(url, version, namespace string, providerConfig *apiv1al
 			Namespace: namespace,
 		},
 		Spec: sourcev1.OCIRepositorySpec{
-			Interval:  interval,
-			URL:       ensureOCIScheme(url),
+			Interval:  metav1.Duration{Duration: time.Minute},
+			URL:       ensureOCIScheme(providerConfig.GetChartURL()),
 			SecretRef: secretRef,
 			Reference: &sourcev1.OCIRepositoryRef{
 				Tag: version,
@@ -263,35 +258,20 @@ func createOciRepository(url, version, namespace string, providerConfig *apiv1al
 	}
 }
 
-func (r *OCMReconciler) createHelmRelease(ctx context.Context, namespace, objectName string, providerConfig *apiv1alpha1.ProviderConfig) (*helmv2.HelmRelease, error) {
-	fluxConfigRef, err := r.getMcpFluxConfig(ctx, namespace, objectName)
+func (r *OCMReconciler) createHelmRelease(ctx context.Context, namespace string, svcobj *apiv1alpha1.OCM, providerConfig *apiv1alpha1.ProviderConfig) (*helmv2.HelmRelease, error) {
+	fluxConfigRef, err := r.getMcpFluxConfig(ctx, namespace, svcobj.Name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get FluxConfig: %w", err)
 	}
 
-	targetNamespace := metav1.NamespaceDefault
-	interval := metav1.Duration{Duration: time.Minute}
+	helmValues := providerConfig.GetValues()
 
-	var helmConfig *apiv1alpha1.HelmConfig
-	if providerConfig != nil {
-		helmConfig = providerConfig.Spec.HelmConfig
+	releaseName := apiv1alpha1.DefaultReleaseName
+	if svcobj.Spec.Name != "" {
+		releaseName = svcobj.Spec.Name
 	}
 
-	if helmConfig != nil {
-		if helmConfig.TargetNamespace != nil {
-			targetNamespace = *helmConfig.TargetNamespace
-		}
-		if helmConfig.Interval != nil {
-			interval = *helmConfig.Interval
-		}
-	}
-
-	var helmValues *apiextensionsv1.JSON
-	if helmConfig != nil && helmConfig.Values != nil {
-		helmValues = helmConfig.Values
-	}
-
-	install, upgrade := buildHelmActions(providerConfig)
+	remediationStrategy := helmv2.RollbackRemediationStrategy
 
 	return &helmv2.HelmRelease{
 		ObjectMeta: metav1.ObjectMeta{
@@ -299,11 +279,25 @@ func (r *OCMReconciler) createHelmRelease(ctx context.Context, namespace, object
 			Namespace: namespace,
 		},
 		Spec: helmv2.HelmReleaseSpec{
-			Interval:         interval,
-			TargetNamespace:  targetNamespace,
-			StorageNamespace: targetNamespace,
-			Install:          install,
-			Upgrade:          upgrade,
+			ReleaseName:      releaseName,
+			Interval:         metav1.Duration{Duration: time.Minute},
+			TargetNamespace:  OcmSystemNamespace,
+			StorageNamespace: OcmSystemNamespace,
+			Install: &helmv2.Install{
+				CRDs:            helmv2.Create,
+				CreateNamespace: true,
+				Remediation: &helmv2.InstallRemediation{
+					Retries: 3,
+				},
+			},
+			Upgrade: &helmv2.Upgrade{
+				CRDs:          helmv2.CreateReplace,
+				CleanupOnFail: true,
+				Remediation: &helmv2.UpgradeRemediation{
+					Retries:  3,
+					Strategy: &remediationStrategy,
+				},
+			},
 			ChartRef: &helmv2.CrossNamespaceSourceReference{
 				Kind:      "OCIRepository",
 				Name:      OCIRepositoryName,
@@ -315,77 +309,4 @@ func (r *OCMReconciler) createHelmRelease(ctx context.Context, namespace, object
 			},
 		},
 	}, nil
-}
-
-func buildHelmActions(providerConfig *apiv1alpha1.ProviderConfig) (*helmv2.Install, *helmv2.Upgrade) {
-	var helmConfig *apiv1alpha1.HelmConfig
-	if providerConfig != nil {
-		helmConfig = providerConfig.Spec.HelmConfig
-	}
-
-	return buildInstall(helmConfig), buildUpgrade(helmConfig)
-}
-
-func buildInstall(cfg *apiv1alpha1.HelmConfig) *helmv2.Install {
-	crds := helmv2.Create
-	retries := 3
-	createNamespace := true
-
-	if cfg != nil && cfg.Install != nil {
-		ic := cfg.Install
-		if ic.CRDs != nil {
-			crds = helmv2.CRDsPolicy(*ic.CRDs)
-		}
-		if ic.Retries != nil {
-			retries = *ic.Retries
-		}
-		if ic.CreateNamespace != nil {
-			createNamespace = *ic.CreateNamespace
-		}
-	}
-
-	return &helmv2.Install{
-		CRDs:            crds,
-		CreateNamespace: createNamespace,
-		Remediation: &helmv2.InstallRemediation{
-			Retries: retries,
-		},
-	}
-}
-
-func buildUpgrade(cfg *apiv1alpha1.HelmConfig) *helmv2.Upgrade {
-	crds := helmv2.CreateReplace
-	retries := 3
-	cleanupOnFail := true
-	force := false
-	remediationStrategy := helmv2.RollbackRemediationStrategy
-
-	if cfg != nil && cfg.Upgrade != nil {
-		uc := cfg.Upgrade
-		if uc.CRDs != nil {
-			crds = helmv2.CRDsPolicy(*uc.CRDs)
-		}
-		if uc.Retries != nil {
-			retries = *uc.Retries
-		}
-		if uc.CleanupOnFail != nil {
-			cleanupOnFail = *uc.CleanupOnFail
-		}
-		if uc.Force != nil {
-			force = *uc.Force
-		}
-		if uc.RemediationStrategy != nil {
-			remediationStrategy = helmv2.RemediationStrategy(*uc.RemediationStrategy)
-		}
-	}
-
-	return &helmv2.Upgrade{
-		CRDs:          crds,
-		CleanupOnFail: cleanupOnFail,
-		Force:         force,
-		Remediation: &helmv2.UpgradeRemediation{
-			Retries:  retries,
-			Strategy: &remediationStrategy,
-		},
-	}
 }

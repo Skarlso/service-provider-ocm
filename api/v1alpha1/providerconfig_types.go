@@ -24,6 +24,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// DefaultChartURL points to the default location of where the ocm-k8s-toolkit chart lives.
+const DefaultChartURL = "ghcr.io/open-component-model/charts/ocm-k8s-toolkit"
+
 // ProviderConfigSpec defines the desired state of ProviderConfig
 type ProviderConfigSpec struct {
 	// +optional
@@ -31,53 +34,18 @@ type ProviderConfigSpec struct {
 	// +kubebuilder:validation:Format=duration
 	PollInterval *metav1.Duration `json:"pollInterval,omitempty"`
 
+	// ChartURL is the OCI URL of the Helm chart. Defaults to the official ocm-k8s-toolkit chart.
 	// +optional
-	HelmConfig *HelmConfig `json:"helmConfig,omitempty"`
+	ChartURL string `json:"chartURL,omitempty"`
 
-	// +optional
-	ImagePullSecret *corev1.LocalObjectReference `json:"imagePullSecret,omitempty"`
-}
-
-// HelmConfig configures Helm install and upgrade behavior for managed HelmReleases.
-type HelmConfig struct {
-	// +optional
-	TargetNamespace *string `json:"targetNamespace,omitempty"`
-	// +optional
-	// +kubebuilder:validation:Format=duration
-	Interval *metav1.Duration `json:"interval,omitempty"`
+	// Values are arbitrary Helm values passed directly to the managed HelmRelease.
 	// +optional
 	Values *apiextensionsv1.JSON `json:"values,omitempty"`
-	// +optional
-	Install *HelmInstallConfig `json:"install,omitempty"`
-	// +optional
-	Upgrade *HelmUpgradeConfig `json:"upgrade,omitempty"`
-}
 
-// HelmInstallConfig configures Helm install actions.
-type HelmInstallConfig struct {
+	// ImagePullSecret references a secret in the controller's namespace to replicate
+	// into tenant namespaces and wire as secretRef on the OCIRepository.
 	// +optional
-	// +kubebuilder:validation:Enum=Skip;Create;CreateReplace
-	CRDs *string `json:"crds,omitempty"`
-	// +optional
-	Retries *int `json:"retries,omitempty"`
-	// +optional
-	CreateNamespace *bool `json:"createNamespace,omitempty"`
-}
-
-// HelmUpgradeConfig configures Helm upgrade actions.
-type HelmUpgradeConfig struct {
-	// +optional
-	// +kubebuilder:validation:Enum=Skip;Create;CreateReplace
-	CRDs *string `json:"crds,omitempty"`
-	// +optional
-	Retries *int `json:"retries,omitempty"`
-	// +optional
-	CleanupOnFail *bool `json:"cleanupOnFail,omitempty"`
-	// +optional
-	Force *bool `json:"force,omitempty"`
-	// +optional
-	// +kubebuilder:validation:Enum=rollback;uninstall
-	RemediationStrategy *string `json:"remediationStrategy,omitempty"`
+	ImagePullSecret *corev1.LocalObjectReference `json:"imagePullSecret,omitempty"`
 }
 
 // ProviderConfigStatus defines the observed state of ProviderConfig.
@@ -141,4 +109,28 @@ func init() {
 func (o *ProviderConfig) PollInterval() time.Duration {
 	// TODO pollInterval has to be required
 	return o.Spec.PollInterval.Duration
+}
+
+// GetChartURL returns the configured chart URL or DefaultChartURL if unset. Nil-safe.
+func (o *ProviderConfig) GetChartURL() string {
+	if o == nil || o.Spec.ChartURL == "" {
+		return DefaultChartURL
+	}
+	return o.Spec.ChartURL
+}
+
+// GetValues returns the Helm values or nil if unset. Nil-safe.
+func (o *ProviderConfig) GetValues() *apiextensionsv1.JSON {
+	if o == nil {
+		return nil
+	}
+	return o.Spec.Values
+}
+
+// GetImagePullSecret returns the image pull secret reference or nil if unset. Nil-safe.
+func (o *ProviderConfig) GetImagePullSecret() *corev1.LocalObjectReference {
+	if o == nil {
+		return nil
+	}
+	return o.Spec.ImagePullSecret
 }

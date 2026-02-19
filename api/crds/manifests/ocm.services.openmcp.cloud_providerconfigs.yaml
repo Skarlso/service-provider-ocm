@@ -41,57 +41,14 @@ spec:
           spec:
             description: spec defines the desired state of ProviderConfig
             properties:
-              helmConfig:
-                description: HelmConfig configures Helm install and upgrade behavior
-                  for managed HelmReleases.
-                properties:
-                  install:
-                    description: HelmInstallConfig configures Helm install actions.
-                    properties:
-                      crds:
-                        enum:
-                        - Skip
-                        - Create
-                        - CreateReplace
-                        type: string
-                      createNamespace:
-                        type: boolean
-                      retries:
-                        type: integer
-                    type: object
-                  interval:
-                    format: duration
-                    type: string
-                  targetNamespace:
-                    type: string
-                  upgrade:
-                    description: HelmUpgradeConfig configures Helm upgrade actions.
-                    properties:
-                      cleanupOnFail:
-                        type: boolean
-                      crds:
-                        enum:
-                        - Skip
-                        - Create
-                        - CreateReplace
-                        type: string
-                      force:
-                        type: boolean
-                      remediationStrategy:
-                        enum:
-                        - rollback
-                        - uninstall
-                        type: string
-                      retries:
-                        type: integer
-                    type: object
-                  values:
-                    x-kubernetes-preserve-unknown-fields: true
-                type: object
+              chartURL:
+                description: ChartURL is the OCI URL of the Helm chart. Defaults to
+                  the official ocm-k8s-toolkit chart.
+                type: string
               imagePullSecret:
                 description: |-
-                  LocalObjectReference contains enough information to let you locate the
-                  referenced object inside the same namespace.
+                  ImagePullSecret references a secret in the controller's namespace to replicate
+                  into tenant namespaces and wire as secretRef on the OCIRepository.
                 properties:
                   name:
                     default: ""
@@ -108,6 +65,10 @@ spec:
                 default: 1m
                 format: duration
                 type: string
+              values:
+                description: Values are arbitrary Helm values passed directly to the
+                  managed HelmRelease.
+                x-kubernetes-preserve-unknown-fields: true
             type: object
           status:
             description: status defines the observed state of ProviderConfig

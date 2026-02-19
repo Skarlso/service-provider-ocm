@@ -3,5 +3,4 @@ kind: OCM
 metadata:
   name: test-mcp
 spec:
-  url: oci://ghcr.io/open-component-model/charts/ocm-k8s-toolkit
   version: 0.0.0-0a2b7a3
