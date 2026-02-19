@@ -1,77 +1,73 @@
-[![REUSE status](https://api.reuse.software/badge/github.com/openmcp-project/service-provider-template)](https://api.reuse.software/info/github.com/openmcp-project/service-provider-template)
+# service-provider-ocm
 
-# service-provider-template
+An [openMCP](https://github.com/openmcp-project) Service Provider that installs and manages
+[OCM K8s Toolkit](https://github.com/open-component-model/ocm-k8s-toolkit) on workload clusters
+via Flux HelmReleases.
 
-## About this project
+## How It Works
 
-A template for building @openmcp-project Service Providers
+When an `OCM` resource is created on the onboarding cluster, the controller:
 
-## Requirements and Setup
+1. Replicates the configured image pull secret into the tenant namespace and wires it into the `OCIRepository`
+2. Creates a Flux `OCIRepository` pointing at the chart URL from the `ProviderConfig` and the version from the `OCM` spec
+3. Creates a Flux `HelmRelease` that deploys the chart into `ocm-system` on the workload cluster via a kubeconfig reference
 
-1. Create a new repository based on this template.
-2. Execute the template to create a new `ServiceProvider`.
-3. Test your `ServiceProvider`.
+## API Reference
 
-The template includes a basic code generation command that lets you create a `ServiceProvider` for your Go module, API kind and group.
-You can also choose to add sample code to get a fully functional `ServiceProvider`.
+### OCM
 
-For a complete usage overview with the default settings, run:
+The domain service API. Created on the onboarding cluster, one per tenant.
 
-```shell
-go run ./cmd/template -h
+```yaml
+apiVersion: ocm.services.openmcp.cloud/v1alpha1
+kind: OCM
+metadata:
+  name: my-ocm
+spec:
+  version: v0.1.0
 ```
 
-Then execute the template, for example:
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `spec.version` | `string` | yes | Chart version tag |
 
-```shell
-go run ./cmd/template -module github.com/yourorg/yourrepo -kind YourKind -group yourgroup
+### ProviderConfig
+
+Cluster-scoped operational configuration. Controls the chart location, image pull
+secret replication, and Helm values passed to managed HelmReleases.
+
+```yaml
+apiVersion: ocm.services.openmcp.cloud/v1alpha1
+kind: ProviderConfig
+metadata:
+  name: ocm-provider-config
+spec:
+  pollInterval: 5m
+  chartURL: ghcr.io/open-component-model/charts/ocm-k8s-toolkit
+  imagePullSecret:
+    name: my-registry-secret
+  values:
+    manager:
+      concurrency:
+        resource: 10
 ```
 
-Running End-to-End tests:
+#### `spec`
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `chartURL` | `string` | no | `ghcr.io/open-component-model/charts/ocm-k8s-toolkit` | OCI URL of the Helm chart (`oci://` prefix is added automatically if missing) |
+| `pollInterval` | `duration` | no | `1m` | How often the controller polls for changes |
+| `imagePullSecret` | `LocalObjectReference` | no | — | Secret to replicate from the controller's namespace into tenant namespaces and set as `secretRef` on the `OCIRepository` |
+| `values` | `object` | no | — | Arbitrary Helm values passed directly to the HelmRelease |
+
+## Running E2E Tests
 
 ```shell
 task test-e2e
 ```
 
-## CLI Flags
-
-### Template Generator Flags
-
-The template generator (`cmd/template`) supports the following flags:
-
-- `-module`: Go module path (default: `github.com/openmcp-project/service-provider-template`)
-- `-kind`: GVK kind name (default: `FooService`)
-- `-group`: GVK group prefix, will be suffixed with `services.openmcp.cloud` (default: `foo`)
-- `-v`: Generate with sample code (default: `false`)
-- `-w`: Generate a service provider that reconciles its `DomainServiceAPI` on the [WorkloadCluster](https://openmcp-project.github.io/docs/about/design/service-provider#deployment-model) (default: `false`)
-
-### Service Provider Runtime Flags
-
-The generated service provider supports the following runtime flags:
-
-- `--verbosity`: Logging verbosity level (see [controller-runtime logging](https://github.com/kubernetes-sigs/controller-runtime/blob/main/TMP-LOGGING.md))
-- `--environment`: Name of the environment (required for operation)
-- `--provider-name`: Name of the provider resource (required for operation)
-- `--metrics-bind-address`: Address for the metrics endpoint (default: `0`, use `:8443` for HTTPS or `:8080` for HTTP)
-- `--health-probe-bind-address`: Address for health probe endpoint (default: `:8081`)
-- `--leader-elect`: Enable leader election for controller manager (default: `false`)
-- `--metrics-secure`: Serve metrics endpoint securely via HTTPS (default: `true`)
-- `--enable-http2`: Enable HTTP/2 for metrics and webhook servers (default: `false`)
-
-For a complete list of available flags, run the generated binary with `-h` or `--help`.
-
-## Support, Feedback, Contributing
-
-This project is open to feature requests/suggestions, bug reports etc. via [GitHub issues](https://github.com/openmcp-project/service-provider-template/issues). Contribution and feedback are encouraged and always welcome. For more information about how to contribute, the project structure, as well as additional contribution information, see our [Contribution Guidelines](CONTRIBUTING.md).
-
-## Security / Disclosure
-
-If you find any bug that may be a security problem, please follow our instructions at [in our security policy](https://github.com/openmcp-project/service-provider-template/security/policy) on how to report it. Please do not create GitHub issues for security-related doubts or problems.
-
-## Code of Conduct
-
-We as members, contributors, and leaders pledge to make participation in our community a harassment-free experience for everyone. By participating in this project, you agree to abide by its [Code of Conduct](https://github.com/SAP/.github/blob/main/CODE_OF_CONDUCT.md) at all times.
-
 ## Licensing
 
-Copyright 2025 SAP SE or an SAP affiliate company and service-provider-template contributors. Please see our [LICENSE](LICENSE) for copyright and license information. Detailed information including third-party components and their licensing/copyright information is available [via the REUSE tool](https://api.reuse.software/info/github.com/openmcp-project/service-provider-template).
+Copyright 2025 SAP SE or an SAP affiliate company and service-provider-ocm contributors.
+See [LICENSE](LICENSE) for details.

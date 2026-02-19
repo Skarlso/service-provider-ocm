@@ -18,8 +18,8 @@ package controller
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
@@ -27,7 +27,7 @@ import (
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	clustersv1alpha1 "github.com/openmcp-project/openmcp-operator/api/clusters/v1alpha1"
 	libutils "github.com/openmcp-project/openmcp-operator/lib/utils"
-	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -41,13 +41,17 @@ import (
 )
 
 const (
-	// HelmReleaseName is the name of the helm releases. Wow, such comment, much useful.
+	// HelmReleaseName is the name of the helmRelease object created for the controller.
 	HelmReleaseName = "helm-release"
-	// OCIRepositoryName is the name of the oci repository. Wow, such comment, much useful.
+	// OCIRepositoryName is the name of the oci repository object pointing to the helm chart of the controller.
 	OCIRepositoryName = "oci-repository"
-	requestSuffixMCP  = "--mcp"
+	// OcmSystemNamespace is the default namespace on the target cluster to use to install the ocm-k8s-toolkit controller into.
+	OcmSystemNamespace = "ocm-system"
+	// requestSuffixMCP is the suffix used for the mcp cluster.
+	requestSuffixMCP = "--mcp"
 )
 
+// clusterAccessName is the name of the access object containing the kubeconfig for the mcp target cluster.
 var clusterAccessName = apiv1alpha1.GroupVersion.Group
 
 // OCMReconciler reconciles a OCM object
@@ -61,7 +65,7 @@ type OCMReconciler struct {
 }
 
 // CreateOrUpdate is called on every add or update event
-func (r *OCMReconciler) CreateOrUpdate(ctx context.Context, svcobj *apiv1alpha1.OCM, _ *apiv1alpha1.ProviderConfig, clusters spruntime.ClusterContext) (ctrl.Result, error) {
+func (r *OCMReconciler) CreateOrUpdate(ctx context.Context, svcobj *apiv1alpha1.OCM, providerConfig *apiv1alpha1.ProviderConfig, clusters spruntime.ClusterContext) (ctrl.Result, error) {
 	l := logf.FromContext(ctx)
 	l.Info("Reconciling OCM resource", "name", svcobj.Name)
 	spruntime.StatusProgressing(svcobj, "Reconciling", "Reconcile in progress")
@@ -72,11 +76,16 @@ func (r *OCMReconciler) CreateOrUpdate(ctx context.Context, svcobj *apiv1alpha1.
 
 	l.Info("checking tenantNamespace", "namespace", tenantNamespace)
 
-	if err := r.createOrUpdateOCIRepository(ctx, svcobj, clusters, tenantNamespace); err != nil {
+	if err := r.replicateImagePullSecret(ctx, providerConfig, tenantNamespace); err != nil {
+		spruntime.StatusFailed(svcobj, err.Error())
+		return ctrl.Result{}, fmt.Errorf("failed to replicate image pull secret: %w", err)
+	}
+
+	if err := r.createOrUpdateOCIRepository(ctx, svcobj, clusters, tenantNamespace, providerConfig); err != nil {
 		spruntime.StatusFailed(svcobj, err.Error())
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile OCI Repository: %w", err)
 	}
-	if err := r.createOrUpdateHelmRelease(ctx, tenantNamespace, svcobj.Name); err != nil {
+	if err := r.createOrUpdateHelmRelease(ctx, tenantNamespace, svcobj, providerConfig); err != nil {
 		spruntime.StatusFailed(svcobj, err.Error())
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile HelmRelease: %w", err)
 	}
@@ -88,7 +97,7 @@ func (r *OCMReconciler) CreateOrUpdate(ctx context.Context, svcobj *apiv1alpha1.
 }
 
 // Delete is called on every delete event
-func (r *OCMReconciler) Delete(ctx context.Context, obj *apiv1alpha1.OCM, _ *apiv1alpha1.ProviderConfig, _ spruntime.ClusterContext) (ctrl.Result, error) {
+func (r *OCMReconciler) Delete(ctx context.Context, obj *apiv1alpha1.OCM, providerConfig *apiv1alpha1.ProviderConfig, _ spruntime.ClusterContext) (ctrl.Result, error) {
 	spruntime.StatusTerminating(obj)
 
 	tenantNamespace, err := libutils.StableMCPNamespace(obj.Name, obj.Namespace)
@@ -97,9 +106,9 @@ func (r *OCMReconciler) Delete(ctx context.Context, obj *apiv1alpha1.OCM, _ *api
 	}
 
 	var objects []client.Object
-	ociRepository := createOciRepository(obj.Spec.URL, obj.Spec.Version, tenantNamespace)
+	ociRepository := createOciRepository(providerConfig, obj.Spec.Version, tenantNamespace)
 	objects = append(objects, ociRepository)
-	helmRelease, err := r.createHelmRelease(ctx, tenantNamespace, obj.Name)
+	helmRelease, err := r.createHelmRelease(ctx, tenantNamespace, obj, providerConfig)
 	if err != nil {
 		spruntime.StatusFailed(obj, err.Error())
 		return ctrl.Result{}, fmt.Errorf("failed to create helm release: %w", err)
@@ -147,8 +156,38 @@ func (r *OCMReconciler) getMcpFluxConfig(ctx context.Context, namespace, objectN
 	}, nil
 }
 
-func (r *OCMReconciler) createOrUpdateOCIRepository(ctx context.Context, svcobj *apiv1alpha1.OCM, _ spruntime.ClusterContext, namespace string) error {
-	ociRepository := createOciRepository(svcobj.Spec.URL, svcobj.Spec.Version, namespace)
+func (r *OCMReconciler) replicateImagePullSecret(ctx context.Context, providerConfig *apiv1alpha1.ProviderConfig, targetNamespace string) error {
+	ref := providerConfig.GetImagePullSecret()
+	if ref == nil {
+		return nil
+	}
+	platformClient := r.PlatformCluster.Client()
+
+	sourceSecret := &corev1.Secret{}
+	sourceKey := client.ObjectKey{Name: ref.Name, Namespace: r.PodNamespace}
+	if err := platformClient.Get(ctx, sourceKey, sourceSecret); err != nil {
+		return fmt.Errorf("failed to get image pull secret %q from namespace %q: %w", ref.Name, r.PodNamespace, err)
+	}
+
+	targetSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ref.Name,
+			Namespace: targetNamespace,
+		},
+	}
+	if _, err := ctrl.CreateOrUpdate(ctx, platformClient, targetSecret, func() error {
+		targetSecret.Data = sourceSecret.Data
+		targetSecret.Type = sourceSecret.Type
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed to replicate image pull secret %q to namespace %q: %w", ref.Name, targetNamespace, err)
+	}
+
+	return nil
+}
+
+func (r *OCMReconciler) createOrUpdateOCIRepository(ctx context.Context, svcobj *apiv1alpha1.OCM, _ spruntime.ClusterContext, namespace string, providerConfig *apiv1alpha1.ProviderConfig) error {
+	ociRepository := createOciRepository(providerConfig, svcobj.Spec.Version, namespace)
 	managedObj := &sourcev1.OCIRepository{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ociRepository.Name,
@@ -167,8 +206,8 @@ func (r *OCMReconciler) createOrUpdateOCIRepository(ctx context.Context, svcobj 
 	return nil
 }
 
-func (r *OCMReconciler) createOrUpdateHelmRelease(ctx context.Context, namespace, objectName string) error {
-	helmRelease, err := r.createHelmRelease(ctx, namespace, objectName)
+func (r *OCMReconciler) createOrUpdateHelmRelease(ctx context.Context, namespace string, svcobj *apiv1alpha1.OCM, providerConfig *apiv1alpha1.ProviderConfig) error {
+	helmRelease, err := r.createHelmRelease(ctx, namespace, svcobj, providerConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create helm release: %w", err)
 	}
@@ -190,15 +229,28 @@ func (r *OCMReconciler) createOrUpdateHelmRelease(ctx context.Context, namespace
 	return nil
 }
 
-func createOciRepository(url, version, namespace string) *sourcev1.OCIRepository {
+func ensureOCIScheme(url string) string {
+	if !strings.HasPrefix(url, "oci://") {
+		return "oci://" + url
+	}
+	return url
+}
+
+func createOciRepository(providerConfig *apiv1alpha1.ProviderConfig, version, namespace string) *sourcev1.OCIRepository {
+	var secretRef *meta.LocalObjectReference
+	if ref := providerConfig.GetImagePullSecret(); ref != nil {
+		secretRef = &meta.LocalObjectReference{Name: ref.Name}
+	}
+
 	return &sourcev1.OCIRepository{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      OCIRepositoryName,
 			Namespace: namespace,
 		},
 		Spec: sourcev1.OCIRepositorySpec{
-			Interval: metav1.Duration{Duration: time.Minute},
-			URL:      url,
+			Interval:  metav1.Duration{Duration: time.Minute},
+			URL:       ensureOCIScheme(providerConfig.GetChartURL()),
+			SecretRef: secretRef,
 			Reference: &sourcev1.OCIRepositoryRef{
 				Tag: version,
 			},
@@ -206,25 +258,15 @@ func createOciRepository(url, version, namespace string) *sourcev1.OCIRepository
 	}
 }
 
-func (r *OCMReconciler) createHelmRelease(ctx context.Context, namespace, objectName string) (*helmv2.HelmRelease, error) {
-	fluxConfigRef, err := r.getMcpFluxConfig(ctx, namespace, objectName)
+func (r *OCMReconciler) createHelmRelease(ctx context.Context, namespace string, svcobj *apiv1alpha1.OCM, providerConfig *apiv1alpha1.ProviderConfig) (*helmv2.HelmRelease, error) {
+	fluxConfigRef, err := r.getMcpFluxConfig(ctx, namespace, svcobj.Name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get FluxConfig: %w", err)
 	}
 
-	values := make(map[string]interface{})
-	values["manager"] = map[string]interface{}{
-		"concurrency": map[string]interface{}{
-			"resource": 21,
-		},
-		"logging": map[string]interface{}{
-			"level": "debug",
-		},
-	}
-	content, err := json.Marshal(values)
-	if err != nil {
-		return nil, err
-	}
+	helmValues := providerConfig.GetValues()
+
+	remediationStrategy := helmv2.RollbackRemediationStrategy
 
 	return &helmv2.HelmRelease{
 		ObjectMeta: metav1.ObjectMeta{
@@ -232,15 +274,31 @@ func (r *OCMReconciler) createHelmRelease(ctx context.Context, namespace, object
 			Namespace: namespace,
 		},
 		Spec: helmv2.HelmReleaseSpec{
+			ReleaseName:      apiv1alpha1.DefaultReleaseName,
 			Interval:         metav1.Duration{Duration: time.Minute},
-			TargetNamespace:  metav1.NamespaceDefault,
-			StorageNamespace: metav1.NamespaceDefault,
+			TargetNamespace:  OcmSystemNamespace,
+			StorageNamespace: OcmSystemNamespace,
+			Install: &helmv2.Install{
+				CRDs:            helmv2.Create,
+				CreateNamespace: true,
+				Remediation: &helmv2.InstallRemediation{
+					Retries: 3,
+				},
+			},
+			Upgrade: &helmv2.Upgrade{
+				CRDs:          helmv2.CreateReplace,
+				CleanupOnFail: true,
+				Remediation: &helmv2.UpgradeRemediation{
+					Retries:  3,
+					Strategy: &remediationStrategy,
+				},
+			},
 			ChartRef: &helmv2.CrossNamespaceSourceReference{
 				Kind:      "OCIRepository",
 				Name:      OCIRepositoryName,
 				Namespace: namespace,
 			},
-			Values: &apiextensionsv1.JSON{Raw: content},
+			Values: helmValues,
 			KubeConfig: &meta.KubeConfigReference{
 				SecretRef: fluxConfigRef,
 			},

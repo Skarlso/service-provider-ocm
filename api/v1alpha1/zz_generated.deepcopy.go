@@ -5,6 +5,8 @@
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 )
@@ -170,6 +172,16 @@ func (in *ProviderConfigSpec) DeepCopyInto(out *ProviderConfigSpec) {
 	if in.PollInterval != nil {
 		in, out := &in.PollInterval, &out.PollInterval
 		*out = new(v1.Duration)
+		**out = **in
+	}
+	if in.Values != nil {
+		in, out := &in.Values, &out.Values
+		*out = new(apiextensionsv1.JSON)
+		(*in).DeepCopyInto(*out)
+	}
+	if in.ImagePullSecret != nil {
+		in, out := &in.ImagePullSecret, &out.ImagePullSecret
+		*out = new(corev1.LocalObjectReference)
 		**out = **in
 	}
 }

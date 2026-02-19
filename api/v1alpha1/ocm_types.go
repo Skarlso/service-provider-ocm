@@ -20,11 +20,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// DefaultReleaseName provides the default value for the helm release of the ocm controller.
+const DefaultReleaseName = "ocm-k8s-toolkit"
+
 // OCMSpec defines the desired state of OCM
 type OCMSpec struct {
-	// URL defines the url from where to fetch the helm charts to install the ocm-k8s-toolkit.
-	URL string `json:"url"`
-	// Version defines the version to fetch.
+	// Version is the version of the controller to install.
 	Version string `json:"version"`
 }
 
