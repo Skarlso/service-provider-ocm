@@ -25,7 +25,7 @@ import (
 )
 
 // DefaultChartURL points to the default location of where the ocm-k8s-toolkit chart lives.
-const DefaultChartURL = "ghcr.io/open-component-model/charts/ocm-k8s-toolkit"
+const DefaultChartURL = "ghcr.io/open-component-model/kubernetes/controller/chart"
 
 // ProviderConfigSpec defines the desired state of ProviderConfig
 type ProviderConfigSpec struct {

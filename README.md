@@ -43,7 +43,7 @@ metadata:
   name: ocm-provider-config
 spec:
   pollInterval: 5m
-  chartURL: ghcr.io/open-component-model/charts/ocm-k8s-toolkit
+  chartURL: ghcr.io/open-component-model/kubernetes/controller/chart
   imagePullSecret:
     name: my-registry-secret
   values:
@@ -54,12 +54,12 @@ spec:
 
 #### `spec`
 
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `chartURL` | `string` | no | `ghcr.io/open-component-model/charts/ocm-k8s-toolkit` | OCI URL of the Helm chart (`oci://` prefix is added automatically if missing) |
-| `pollInterval` | `duration` | no | `1m` | How often the controller polls for changes |
-| `imagePullSecret` | `LocalObjectReference` | no | — | Secret to replicate from the controller's namespace into tenant namespaces and set as `secretRef` on the `OCIRepository` |
-| `values` | `object` | no | — | Arbitrary Helm values passed directly to the HelmRelease |
+| Field | Type | Required | Default                                                    | Description |
+|-------|------|----------|------------------------------------------------------------|-------------|
+| `chartURL` | `string` | no | `ghcr.io/open-component-model/kubernetes/controller/chart` | OCI URL of the Helm chart (`oci://` prefix is added automatically if missing) |
+| `pollInterval` | `duration` | no | `1m`                                                       | How often the controller polls for changes |
+| `imagePullSecret` | `LocalObjectReference` | no | —                                                          | Secret to replicate from the controller's namespace into tenant namespaces and set as `secretRef` on the `OCIRepository` |
+| `values` | `object` | no | —                                                          | Arbitrary Helm values passed directly to the HelmRelease |
 
 ## Running E2E Tests
 
