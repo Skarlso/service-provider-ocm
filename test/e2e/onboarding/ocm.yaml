@@ -3,4 +3,4 @@ kind: OCM
 metadata:
   name: test-mcp
 spec:
-  version: 0.0.0-0a2b7a3
+  version: 0.0.0-445a301
