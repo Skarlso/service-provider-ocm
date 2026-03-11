@@ -46,7 +46,7 @@ const (
 	// OCIRepositoryName is the name of the oci repository object pointing to the helm chart of the controller.
 	OCIRepositoryName = "oci-repository"
 	// OcmSystemNamespace is the default namespace on the target cluster to use to install the ocm-k8s-toolkit controller into.
-	OcmSystemNamespace = "ocm-system"
+	OcmSystemNamespace = "ocm-k8s-toolkit-system"
 	// requestSuffixMCP is the suffix used for the mcp cluster.
 	requestSuffixMCP = "--mcp"
 )

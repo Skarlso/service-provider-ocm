@@ -10,7 +10,7 @@ When an `OCM` resource is created on the onboarding cluster, the controller:
 
 1. Replicates the configured image pull secret into the tenant namespace and wires it into the `OCIRepository`
 2. Creates a Flux `OCIRepository` pointing at the chart URL from the `ProviderConfig` and the version from the `OCM` spec
-3. Creates a Flux `HelmRelease` that deploys the chart into `ocm-system` on the workload cluster via a kubeconfig reference
+3. Creates a Flux `HelmRelease` that deploys the chart into `ocm-k8s-toolkit-system` on the workload cluster via a kubeconfig reference
 
 ## API Reference
 
