@@ -22,6 +22,7 @@ import (
 
 func TestServiceProvider(t *testing.T) {
 	var onboardingList unstructured.UnstructuredList
+	mcpName := "test-mcp"
 	basicProviderTest := features.New("provider test").
 		Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 			if _, err := resources.CreateObjectsFromDir(ctx, c, "platform"); err != nil {
@@ -29,7 +30,7 @@ func TestServiceProvider(t *testing.T) {
 			}
 			return ctx
 		}).
-		Setup(providers.CreateMCP("test-mcp")).
+		Setup(providers.CreateMCP(mcpName)).
 		Assess("verify service can be successfully consumed",
 			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				onboardingConfig, err := clusterutils.OnboardingConfig()
@@ -52,7 +53,7 @@ func TestServiceProvider(t *testing.T) {
 			},
 		). // Add Assess to verify that helmRelese and Oci Repo are Ready.
 		Assess("verify that helm release and oci repository are ready", func(ctx context.Context, t *testing.T, config *envconf.Config) context.Context {
-			tenantNamespace, err := libutils.StableMCPNamespace("test-mcp", "default")
+			tenantNamespace, err := libutils.StableMCPNamespace(mcpName, "default")
 			if err != nil {
 				t.Errorf("failed to get tenant namespace: %v", err)
 				return ctx
@@ -75,7 +76,7 @@ func TestServiceProvider(t *testing.T) {
 
 			return ctx
 		}).
-		Assess("verify domain objects can be created", providers.ImportDomainAPIs("mcp")).
+		Assess("verify domain objects can be created", providers.ImportDomainAPIs(mcpName, "mcp")).
 		Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 			onboardingConfig, err := clusterutils.OnboardingConfig()
 			if err != nil {
@@ -89,6 +90,6 @@ func TestServiceProvider(t *testing.T) {
 			}
 			return ctx
 		}).
-		Teardown(providers.DeleteMCP("test-mcp", wait.WithTimeout(5*time.Minute)))
+		Teardown(providers.DeleteMCP(mcpName, wait.WithTimeout(5*time.Minute)))
 	testenv.Test(t, basicProviderTest.Feature())
 }

@@ -38,8 +38,9 @@ func TestMain(m *testing.M) {
 		},
 		ServiceProviders: []providers.ServiceProviderSetup{
 			{
-				Name:  "ocm",
-				Image: "ghcr.io/open-component-model/images/service-provider-ocm:" + os.Getenv("VERSION"),
+				Name:               "ocm",
+				Image:              "ghcr.io/open-component-model/images/service-provider-ocm:" + os.Getenv("VERSION"),
+				LoadImageToCluster: true,
 			},
 		},
 	}
