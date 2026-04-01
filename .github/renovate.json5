@@ -28,7 +28,10 @@
     // Major updates are left open for manual review because they may
     // contain breaking changes.
     {
-      matchUpdateTypes: ['minor', 'patch'],
+      matchUpdateTypes: [
+        'minor',
+        'patch',
+      ],
       automerge: true,
     },
 
@@ -36,16 +39,24 @@
     // Run `go mod tidy` after every Go dependency update to keep go.sum
     // consistent and avoid noisy follow-up commits.
     {
-      matchCategories: ['golang'],
-      postUpdateOptions: ['gomodTidy'],
+      matchCategories: [
+        'golang',
+      ],
+      postUpdateOptions: [
+        'gomodTidy',
+      ],
     },
 
     // ── Suppress Docker digest-only churn ────────────────────────────────
     // Digest-only bumps for Docker images create noise without a meaningful
     // version change. Disable them; tagged version bumps still come through.
     {
-      matchDatasources: ['docker'],
-      matchUpdateTypes: ['digest'],
+      matchDatasources: [
+        'docker',
+      ],
+      matchUpdateTypes: [
+        'digest',
+      ],
       enabled: false,
     },
 
@@ -56,22 +67,29 @@
     // Kubernetes client libraries (k8s.io, sigs.k8s.io) are tightly coupled
     // and should always be updated together to avoid version skew.
     {
-      matchPackagePrefixes: ['k8s.io/', 'sigs.k8s.io/'],
       groupName: 'Kubernetes Go modules',
+      matchPackageNames: [
+        'k8s.io/{/,}**',
+        'sigs.k8s.io/{/,}**',
+      ],
     },
 
     // OCM libraries often share release cycles; grouping them prevents
     // partial upgrades that could break cross-module compatibility.
     {
-      matchPackagePrefixes: ['github.com/open-component-model/'],
       groupName: 'OCM Go modules',
+      matchPackageNames: [
+        'github.com/open-component-model/{/,}**',
+      ],
     },
 
     // GitHub Actions are pinned to digests (via helpers:pinGitHubActionDigests).
     // Grouping their updates into one PR keeps CI pipeline changes atomic
     // and easy to review.
     {
-      matchManagers: ['github-actions'],
+      matchManagers: [
+        'github-actions',
+      ],
       groupName: 'GitHub Actions',
     },
   ],
