@@ -13,6 +13,12 @@
     enabled: true,
   },
 
+  // Ignore workflow files inside the hack/common submodule — they are
+  // managed by openmcp-project/build and cannot be modified from this repo.
+  ignorePaths: [
+    'hack/common/**',
+  ],
+
   // Default: do not auto-merge. Individual rules below opt in for low-risk updates.
   automerge: false,
   automergeType: 'pr',
