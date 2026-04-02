@@ -60,6 +60,7 @@
       enabled: false,
     },
 
+
     // ── Dependency grouping ──────────────────────────────────────────────
     // Group related dependencies into a single PR to reduce review overhead
     // and ensure co-dependent packages stay in sync.
