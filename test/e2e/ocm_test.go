@@ -11,11 +11,12 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/e2e-framework/klient/wait"
+	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 	"sigs.k8s.io/e2e-framework/pkg/features"
 
 	"github.com/openmcp-project/openmcp-testing/pkg/clusterutils"
-	"github.com/openmcp-project/openmcp-testing/pkg/conditions"
+	openmcpconditions "github.com/openmcp-project/openmcp-testing/pkg/conditions"
 	"github.com/openmcp-project/openmcp-testing/pkg/providers"
 	"github.com/openmcp-project/openmcp-testing/pkg/resources"
 )
@@ -44,7 +45,7 @@ func TestServiceProvider(t *testing.T) {
 					return ctx
 				}
 				for _, obj := range objList.Items {
-					if err := wait.For(conditions.Match(&obj, onboardingConfig, "Ready", corev1.ConditionTrue)); err != nil {
+					if err := wait.For(openmcpconditions.Match(&obj, onboardingConfig, "Ready", corev1.ConditionTrue)); err != nil {
 						t.Error(err)
 					}
 				}
@@ -67,11 +68,21 @@ func TestServiceProvider(t *testing.T) {
 			ociRepo.SetName("oci-repository")
 			ociRepo.SetNamespace(tenantNamespace)
 
-			if err := wait.For(conditions.Match(helmRelease, config, "Ready", corev1.ConditionTrue), wait.WithTimeout(2*time.Minute)); err != nil {
+			chartSecret := &corev1.Secret{}
+			chartSecret.SetName("sp-ocm-privateregcred")
+			chartSecret.SetNamespace(tenantNamespace)
+			pullSecrets := &corev1.SecretList{
+				Items: []corev1.Secret{*chartSecret},
+			}
+
+			if err := wait.For(openmcpconditions.Match(helmRelease, config, "Ready", corev1.ConditionTrue), wait.WithTimeout(2*time.Minute)); err != nil {
 				t.Errorf("HelmRelease not ready: %v", err)
 			}
-			if err := wait.For(conditions.Match(ociRepo, config, "Ready", corev1.ConditionTrue), wait.WithTimeout(2*time.Minute)); err != nil {
+			if err := wait.For(openmcpconditions.Match(ociRepo, config, "Ready", corev1.ConditionTrue), wait.WithTimeout(2*time.Minute)); err != nil {
 				t.Errorf("OCIRepository not ready: %v", err)
+			}
+			if err := wait.For(conditions.New(config.Client().Resources()).ResourcesFound(pullSecrets), wait.WithTimeout(2*time.Minute)); err != nil {
+				t.Errorf("pull secret not found: %v", err)
 			}
 
 			return ctx

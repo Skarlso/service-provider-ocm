@@ -25,10 +25,12 @@ import (
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	"github.com/fluxcd/pkg/apis/meta"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
+	ctrlutils "github.com/openmcp-project/controller-utils/pkg/controller"
 	clustersv1alpha1 "github.com/openmcp-project/openmcp-operator/api/clusters/v1alpha1"
 	libutils "github.com/openmcp-project/openmcp-operator/lib/utils"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -49,6 +51,8 @@ const (
 	OcmSystemNamespace = "ocm-k8s-toolkit-system"
 	// requestSuffixMCP is the suffix used for the mcp cluster.
 	requestSuffixMCP = "--mcp"
+	// secretNamePrefix is used to prefix the chart pull secret copy in the tenant namespace on the platform cluster.
+	secretNamePrefix = "sp-ocm-"
 )
 
 // clusterAccessName is the name of the access object containing the kubeconfig for the mcp target cluster.
@@ -65,7 +69,7 @@ type OCMReconciler struct {
 }
 
 // CreateOrUpdate is called on every add or update event
-func (r *OCMReconciler) CreateOrUpdate(ctx context.Context, svcobj *apiv1alpha1.OCM, providerConfig *apiv1alpha1.ProviderConfig, clusters spruntime.ClusterContext) (ctrl.Result, error) {
+func (r *OCMReconciler) CreateOrUpdate(ctx context.Context, svcobj *apiv1alpha1.OCM, providerConfig *apiv1alpha1.ProviderConfig, _ spruntime.ClusterContext) (ctrl.Result, error) {
 	l := logf.FromContext(ctx)
 	l.Info("Reconciling OCM resource", "name", svcobj.Name)
 	spruntime.StatusProgressing(svcobj, "Reconciling", "Reconcile in progress")
@@ -76,12 +80,17 @@ func (r *OCMReconciler) CreateOrUpdate(ctx context.Context, svcobj *apiv1alpha1.
 
 	l.Info("checking tenantNamespace", "namespace", tenantNamespace)
 
-	if err := r.replicateImagePullSecret(ctx, providerConfig, tenantNamespace); err != nil {
+	prefixedSecretName, err := prefixSecretName(providerConfig.GetImagePullSecret())
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("error prefixing image pull secret %q: %w", providerConfig.GetImagePullSecret().Name, err)
+	}
+
+	if err := r.replicateImagePullSecret(ctx, providerConfig, types.NamespacedName{Name: prefixedSecretName, Namespace: tenantNamespace}); err != nil {
 		spruntime.StatusFailed(svcobj, err.Error())
 		return ctrl.Result{}, fmt.Errorf("failed to replicate image pull secret: %w", err)
 	}
 
-	if err := r.createOrUpdateOCIRepository(ctx, svcobj, clusters, tenantNamespace, providerConfig); err != nil {
+	if err := r.createOrUpdateOCIRepository(ctx, providerConfig.GetChartURL(), svcobj.Spec.Version, prefixedSecretName, tenantNamespace); err != nil {
 		spruntime.StatusFailed(svcobj, err.Error())
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile OCI Repository: %w", err)
 	}
@@ -105,8 +114,13 @@ func (r *OCMReconciler) Delete(ctx context.Context, obj *apiv1alpha1.OCM, provid
 		return ctrl.Result{}, fmt.Errorf("failed to determine stable namespace for OCM instance: %w", err)
 	}
 
+	prefixedSecretName, err := prefixSecretName(providerConfig.GetImagePullSecret())
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("error prefixing image pull secret %q: %w", providerConfig.GetImagePullSecret().Name, err)
+	}
+
 	var objects []client.Object
-	ociRepository := createOciRepository(providerConfig, obj.Spec.Version, tenantNamespace)
+	ociRepository := createOciRepository(providerConfig.GetChartURL(), prefixedSecretName, obj.Spec.Version, tenantNamespace)
 	objects = append(objects, ociRepository)
 	helmRelease, err := r.createHelmRelease(ctx, tenantNamespace, obj, providerConfig)
 	if err != nil {
@@ -156,7 +170,7 @@ func (r *OCMReconciler) getMcpFluxConfig(ctx context.Context, namespace, objectN
 	}, nil
 }
 
-func (r *OCMReconciler) replicateImagePullSecret(ctx context.Context, providerConfig *apiv1alpha1.ProviderConfig, targetNamespace string) error {
+func (r *OCMReconciler) replicateImagePullSecret(ctx context.Context, providerConfig *apiv1alpha1.ProviderConfig, target types.NamespacedName) error {
 	ref := providerConfig.GetImagePullSecret()
 	if ref == nil {
 		return nil
@@ -171,8 +185,8 @@ func (r *OCMReconciler) replicateImagePullSecret(ctx context.Context, providerCo
 
 	targetSecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      ref.Name,
-			Namespace: targetNamespace,
+			Name:      target.Name,
+			Namespace: target.Namespace,
 		},
 	}
 	if _, err := ctrl.CreateOrUpdate(ctx, platformClient, targetSecret, func() error {
@@ -180,14 +194,14 @@ func (r *OCMReconciler) replicateImagePullSecret(ctx context.Context, providerCo
 		targetSecret.Type = sourceSecret.Type
 		return nil
 	}); err != nil {
-		return fmt.Errorf("failed to replicate image pull secret %q to namespace %q: %w", ref.Name, targetNamespace, err)
+		return fmt.Errorf("failed to replicate image pull secret %q to namespace %q: %w", ref.Name, target.Namespace, err)
 	}
 
 	return nil
 }
 
-func (r *OCMReconciler) createOrUpdateOCIRepository(ctx context.Context, svcobj *apiv1alpha1.OCM, _ spruntime.ClusterContext, namespace string, providerConfig *apiv1alpha1.ProviderConfig) error {
-	ociRepository := createOciRepository(providerConfig, svcobj.Spec.Version, namespace)
+func (r *OCMReconciler) createOrUpdateOCIRepository(ctx context.Context, chartURL, version, secretName, namespace string) error {
+	ociRepository := createOciRepository(chartURL, secretName, version, namespace)
 	managedObj := &sourcev1.OCIRepository{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ociRepository.Name,
@@ -236,10 +250,10 @@ func ensureOCIScheme(url string) string {
 	return url
 }
 
-func createOciRepository(providerConfig *apiv1alpha1.ProviderConfig, version, namespace string) *sourcev1.OCIRepository {
+func createOciRepository(chartURL, secretName, version, namespace string) *sourcev1.OCIRepository {
 	var secretRef *meta.LocalObjectReference
-	if ref := providerConfig.GetImagePullSecret(); ref != nil {
-		secretRef = &meta.LocalObjectReference{Name: ref.Name}
+	if secretName != "" {
+		secretRef = &meta.LocalObjectReference{Name: secretName}
 	}
 
 	return &sourcev1.OCIRepository{
@@ -249,7 +263,7 @@ func createOciRepository(providerConfig *apiv1alpha1.ProviderConfig, version, na
 		},
 		Spec: sourcev1.OCIRepositorySpec{
 			Interval:  metav1.Duration{Duration: time.Minute},
-			URL:       ensureOCIScheme(providerConfig.GetChartURL()),
+			URL:       ensureOCIScheme(chartURL),
 			SecretRef: secretRef,
 			Reference: &sourcev1.OCIRepositoryRef{
 				Tag: version,
@@ -304,4 +318,14 @@ func (r *OCMReconciler) createHelmRelease(ctx context.Context, namespace string,
 			},
 		},
 	}, nil
+}
+
+// prefixSecretName adds the "sp-ocm-" prefix to the given secret to prevent name collisions
+// in namespaces where multiple service providers operate. If the resulting name exceeds k8s limit,
+// it will be truncated and a hash suffix appended for uniqueness.
+func prefixSecretName(secret *corev1.LocalObjectReference) (string, error) {
+	if secret == nil {
+		return "", nil
+	}
+	return ctrlutils.ShortenToXCharacters(fmt.Sprintf("%s%s", secretNamePrefix, secret.Name), ctrlutils.K8sMaxNameLength)
 }
