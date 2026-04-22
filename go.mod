@@ -1,14 +1,14 @@
 module github.com/open-component-model/service-provider-ocm
 
-go 1.26.1
+go 1.26.2
 
 require (
 	github.com/fluxcd/helm-controller/api v1.5.4
 	github.com/fluxcd/pkg/apis/meta v1.26.0
 	github.com/fluxcd/source-controller/api v1.8.3
 	github.com/openmcp-project/controller-utils v0.27.1
-	github.com/openmcp-project/openmcp-operator/api v0.18.1
-	github.com/openmcp-project/openmcp-operator/lib v0.18.1
+	github.com/openmcp-project/openmcp-operator/api v0.19.0
+	github.com/openmcp-project/openmcp-operator/lib v0.19.0
 	k8s.io/api v0.35.4
 	k8s.io/apimachinery v0.35.4
 	k8s.io/client-go v0.35.4
@@ -115,7 +115,7 @@ require (
 	k8s.io/component-base v0.35.4 // indirect
 	k8s.io/klog/v2 v2.140.0
 	k8s.io/kube-openapi v0.0.0-20251125145642-4e65d59e963e // indirect
-	k8s.io/utils v0.0.0-20260108192941-914a6e750570 // indirect
+	k8s.io/utils v0.0.0-20260319190234-28399d86e0b5 // indirect
 	sigs.k8s.io/e2e-framework v0.7.0
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
