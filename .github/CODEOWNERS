@@ -7,6 +7,10 @@
 /.github/settings.yml   @open-component-model/admins
 /.github/CODEOWNERS     @open-component-model/admins
 
+# Add ocp team as reviewers
+* @openmcp-project/sig-extensibility-approvers
+* @christophrj
+
 # Owners for specific directories
 #/docs/  @<org>/<team>
 #/src/   @<org>/<team>
