@@ -19,6 +19,7 @@ package v1alpha1
 import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // DefaultReleaseName provides the default value for the helm release of the ocm controller.
@@ -121,7 +122,10 @@ type OCMList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&OCM{}, &OCMList{})
+	SchemeBuilder.Register(func(s *runtime.Scheme) error {
+		s.AddKnownTypes(GroupVersion, &OCM{}, &OCMList{})
+		return nil
+	})
 }
 
 // Finalizer returns the finalizer string for the OCM resource
