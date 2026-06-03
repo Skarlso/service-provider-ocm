@@ -28,7 +28,7 @@ metadata:
   name: mcp-01 # must match your MCP cluster so it will track the right cluster
 spec:
   # renovate: datasource=docker depName=ghcr.io/open-component-model/kubernetes/controller/chart
-  version: 0.7.0
+  version: 0.8.0
 ```
 
 | Field | Type | Required | Description |
