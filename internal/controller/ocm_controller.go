@@ -29,8 +29,11 @@ import (
 	clustersv1alpha1 "github.com/openmcp-project/openmcp-operator/api/clusters/v1alpha1"
 	libutils "github.com/openmcp-project/openmcp-operator/lib/utils"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -54,6 +57,16 @@ const (
 	requestSuffixMCP = "--mcp"
 	// secretNamePrefix is used to prefix the chart pull secret copy in the tenant namespace on the platform cluster.
 	secretNamePrefix = "sp-ocm-"
+
+	// ocmAPIGroup is the API group under which the ocm-k8s-toolkit serves its custom resources.
+	ocmAPIGroup = "delivery.ocm.software"
+	// ocmAPIVersion is the API version of the ocm-k8s-toolkit's Repository resource.
+	ocmAPIVersion = "v1alpha1"
+	// repositoryListKind is the list kind of the ocm-k8s-toolkit Repository resource.
+	repositoryListKind = "RepositoryList"
+	// deletionBlockedRequeue is how long to wait before re-checking whether the
+	// user's ocm resources have been removed and deletion may proceed.
+	deletionBlockedRequeue = 10 * time.Second
 )
 
 // clusterAccessName is the name of the access object containing the kubeconfig for the mcp target cluster.
@@ -145,12 +158,23 @@ func (r *OCMReconciler) CreateOrUpdate(ctx context.Context, svcobj *apiv1alpha1.
 }
 
 // Delete is called on every delete event
-func (r *OCMReconciler) Delete(ctx context.Context, obj *apiv1alpha1.OCM, providerConfig *apiv1alpha1.ProviderConfig, _ spruntime.ClusterContext) (ctrl.Result, error) {
+func (r *OCMReconciler) Delete(ctx context.Context, obj *apiv1alpha1.OCM, providerConfig *apiv1alpha1.ProviderConfig, clusterCtx spruntime.ClusterContext) (ctrl.Result, error) {
 	spruntime.StatusTerminating(obj)
 
 	tenantNamespace, err := libutils.StableMCPNamespace(obj.Name, obj.Namespace)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to determine stable namespace for OCM instance: %w", err)
+	}
+
+	// Block deletion while the user still has ocm-k8s-toolkit resources on the
+	// control plane, so their managed resources are not orphaned.
+	res, blocked, err := r.repositoriesBlockDeletion(ctx, obj, clusterCtx, tenantNamespace)
+	if err != nil {
+		spruntime.StatusFailed(obj, err.Error())
+		return ctrl.Result{}, fmt.Errorf("failed to check for remaining ocm resources: %w", err)
+	}
+	if blocked {
+		return res, nil
 	}
 
 	obj.Status.Resources = managedResources(tenantNamespace, apiv1alpha1.Terminating)
@@ -192,6 +216,45 @@ func (r *OCMReconciler) Delete(ctx context.Context, obj *apiv1alpha1.OCM, provid
 	obj.Status.Resources = nil
 	spruntime.StatusReady(obj)
 	return ctrl.Result{}, nil
+}
+
+// repositoriesBlockDeletion reports whether the control plane still has ocm
+// Repository resources, in which case deletion must wait so their managed
+// resources are not orphaned. It returns a requeue result and true when blocked.
+func (r *OCMReconciler) repositoriesBlockDeletion(ctx context.Context, obj *apiv1alpha1.OCM, clusterCtx spruntime.ClusterContext, tenantNamespace string) (ctrl.Result, bool, error) {
+	if clusterCtx.MCPCluster == nil {
+		return ctrl.Result{}, false, nil
+	}
+	remaining, err := r.countRepositories(ctx, clusterCtx.MCPCluster)
+	if err != nil {
+		return ctrl.Result{}, false, err
+	}
+	if remaining == 0 {
+		return ctrl.Result{}, false, nil
+	}
+	msg := fmt.Sprintf("deletion blocked: waiting for %d ocm Repository resource(s) to be removed from the control plane", remaining)
+	logf.FromContext(ctx).Info(msg)
+	spruntime.StatusTerminatingMessage(obj, msg)
+	obj.Status.Resources = managedResources(tenantNamespace, apiv1alpha1.Terminating)
+	return ctrl.Result{RequeueAfter: deletionBlockedRequeue}, true, nil
+}
+
+// countRepositories returns the number of ocm-k8s-toolkit Repository objects present
+// on the given (control plane) cluster. If the kind is not installed this returns 0.
+func (r *OCMReconciler) countRepositories(ctx context.Context, mcpCluster *clusters.Cluster) (int, error) {
+	list := &unstructured.UnstructuredList{}
+	list.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   ocmAPIGroup,
+		Version: ocmAPIVersion,
+		Kind:    repositoryListKind,
+	})
+	if err := mcpCluster.Client().List(ctx, list); err != nil {
+		if apimeta.IsNoMatchError(err) || apierrors.IsNotFound(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return len(list.Items), nil
 }
 
 // managedResources returns the set of platform-cluster objects this controller

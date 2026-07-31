@@ -71,6 +71,11 @@ func StatusTerminating(obj ServiceProviderAPI) {
 	obj.SetPhase(StatusPhaseTerminating)
 }
 
+// StatusTerminatingMessage indicates terminating with a custom message.
+func StatusTerminatingMessage(obj ServiceProviderAPI, message string) {
+	terminatingWithReason(obj, "Terminating", message)
+}
+
 func terminatingWithReason(obj ServiceProviderAPI, reason, message string) {
 	meta.SetStatusCondition(obj.GetConditions(), metav1.Condition{
 		Type:               ServiceProviderConditionReady,

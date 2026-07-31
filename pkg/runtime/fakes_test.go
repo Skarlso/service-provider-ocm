@@ -65,13 +65,17 @@ func createFakeClusterWithUnstructuredList(t *testing.T, id string, objs []clien
 var _ ServiceProviderAPI = &fakeApiImpl{}
 
 type fakeApiImpl struct {
-	metav1.TypeMeta
-	metav1.ObjectMeta
-	conditions []metav1.Condition
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	conditions        []metav1.Condition
 }
 
 func (f *fakeApiImpl) DeepCopyObject() runtime.Object {
-	return f
+	return &fakeApiImpl{
+		TypeMeta:   f.TypeMeta,
+		ObjectMeta: *f.DeepCopy(),
+		conditions: append([]metav1.Condition(nil), f.conditions...),
+	}
 }
 
 func (f *fakeApiImpl) Finalizer() string {
