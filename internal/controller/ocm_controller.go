@@ -221,6 +221,10 @@ func (r *OCMReconciler) Delete(ctx context.Context, obj *apiv1alpha1.OCM, provid
 // repositoriesBlockDeletion reports whether the control plane still has ocm
 // Repository resources, in which case deletion must wait so their managed
 // resources are not orphaned. It returns a requeue result and true when blocked.
+// Note: We only check repositories because without a repository, usually, nothing works,
+// and repositories have deletion prevention in case there is anything still referencing them.
+// Therefor it's enough to check for Repository existence because if they don't, usually,
+// nothing else does.
 func (r *OCMReconciler) repositoriesBlockDeletion(ctx context.Context, obj *apiv1alpha1.OCM, clusterCtx spruntime.ClusterContext, tenantNamespace string) (ctrl.Result, bool, error) {
 	if clusterCtx.MCPCluster == nil {
 		return ctrl.Result{}, false, nil
