@@ -43,6 +43,37 @@ func TestSPReconciler_Reconcile_IgnoreAnnotation(t *testing.T) {
 	assert.Equal(t, ctrl.Result{}, got)
 }
 
+func TestSPReconciler_Reconcile_ReconcileAnnotationConsumed(t *testing.T) {
+	obj := &fakeApiImpl{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "obj-1",
+			Namespace: testNamespaceName,
+			Annotations: map[string]string{
+				apiconst.OperationAnnotation: apiconst.OperationAnnotationValueReconcile,
+				"keep.me/annotation":         "value",
+			},
+		},
+	}
+	onboardingCluster := createFakeCluster(t, "onboarding", obj)
+	r := NewSPReconciler[*fakeApiImpl, *fakeProviderConfigImpl](func() *fakeApiImpl {
+		return &fakeApiImpl{}
+	}).
+		WithOnboardingCluster(onboardingCluster)
+
+	// Reconcile stops later at the missing ProviderConfig, but the reconcile
+	// annotation must already have been consumed by then.
+	_, _ = r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "obj-1", Namespace: testNamespaceName},
+	})
+
+	got := &fakeApiImpl{}
+	require.NoError(t, onboardingCluster.Client().Get(context.Background(),
+		types.NamespacedName{Name: "obj-1", Namespace: testNamespaceName}, got))
+	_, hasOperation := got.GetAnnotations()[apiconst.OperationAnnotation]
+	assert.False(t, hasOperation, "reconcile operation annotation should be removed")
+	assert.Equal(t, "value", got.GetAnnotations()["keep.me/annotation"], "unrelated annotations must be preserved")
+}
+
 func TestSPReconciler_enqueueAllObjects(t *testing.T) {
 	tests := []struct {
 		name              string

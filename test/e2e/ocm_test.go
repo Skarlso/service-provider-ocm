@@ -10,6 +10,7 @@ import (
 	libutils "github.com/openmcp-project/openmcp-operator/lib/utils"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/e2e-framework/klient/wait"
 	"sigs.k8s.io/e2e-framework/klient/wait/conditions"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
@@ -147,6 +148,25 @@ func TestServiceProvider(t *testing.T) {
 		}).
 		Assess("verify domain objects can be created", providers.ImportDomainAPIs(mcpName, "mcp")).
 		Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+			// Remove the ocm Repository from the MCP first, otherwise the OCM
+			// deletion is blocked to avoid orphaning its managed resources.
+			mcpConfig, err := clusterutils.MCPConfig(ctx, c, mcpName)
+			if err != nil {
+				t.Errorf("failed to get MCP config: %v", err)
+			}
+
+			repo := &unstructured.Unstructured{}
+			repo.SetGroupVersionKind(schema.GroupVersionKind{
+				Group:   "delivery.ocm.software",
+				Version: "v1alpha1",
+				Kind:    "Repository",
+			})
+			repo.SetName("platform-mesh")
+			repo.SetNamespace("default")
+			if err := resources.DeleteObject(ctx, mcpConfig, repo, wait.WithTimeout(time.Minute)); err != nil {
+				t.Errorf("failed to delete Repository from MCP: %v", err)
+			}
+
 			onboardingConfig, err := clusterutils.OnboardingConfig()
 			if err != nil {
 				t.Error(err)

@@ -145,6 +145,19 @@ func (r *SPReconciler[T, PC]) Reconcile(ctx context.Context, req ctrl.Request) (
 		l.Info("Skipping resource due to ignore operation annotation")
 		return ctrl.Result{}, nil
 	}
+	// Honor a manual reconcile trigger by consuming the annotation so it fires once.
+	if obj.GetAnnotations()[apiconst.OperationAnnotation] == apiconst.OperationAnnotationValueReconcile {
+		l.Info("Consuming reconcile operation annotation")
+		patched := obj.DeepCopyObject().(T)
+		annotations := patched.GetAnnotations()
+		delete(annotations, apiconst.OperationAnnotation)
+		patched.SetAnnotations(annotations)
+		if err := r.onboardingCluster.Client().Patch(ctx, patched, client.MergeFrom(obj)); err != nil {
+			l.Error(err, "failed to remove reconcile operation annotation")
+			return ctrl.Result{}, err
+		}
+		obj = patched
+	}
 	oldObj := obj.DeepCopyObject().(T)
 	// always try to update the obj status
 	defer func() {
