@@ -19,7 +19,6 @@ package controller
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
@@ -29,6 +28,7 @@ import (
 	clustersv1alpha1 "github.com/openmcp-project/openmcp-operator/api/clusters/v1alpha1"
 	libutils "github.com/openmcp-project/openmcp-operator/lib/utils"
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -94,26 +94,35 @@ func (r *OCMReconciler) CreateOrUpdate(ctx context.Context, svcobj *apiv1alpha1.
 
 	l.Info("checking tenantNamespace", "namespace", tenantNamespace)
 
-	prefixedSecretName, err := prefixSecretName(providerConfig.GetImagePullSecret())
+	// Map the tenant requested version onto the artifacts the ProviderConfig offers for it.
+	version, err := providerConfig.ResolveVersion(svcobj.Spec.Version)
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("error prefixing image pull secret %q: %w", providerConfig.GetImagePullSecret().Name, err)
-	}
-
-	if err := r.replicateImagePullSecret(ctx, providerConfig, types.NamespacedName{Name: prefixedSecretName, Namespace: tenantNamespace}); err != nil {
+		l.Info("requested version is not offered by the provider config", "version", svcobj.Spec.Version, "error", err.Error())
 		spruntime.StatusFailed(svcobj, err.Error())
-		return ctrl.Result{}, fmt.Errorf("failed to replicate image pull secret: %w", err)
+		return ctrl.Result{}, nil
+	}
+	l.Info("resolved requested version", "version", version.Version, "chartVersion", version.ChartVersion, "chartURL", version.GetChartURL())
+
+	prefixedSecretName, err := prefixSecretName(version.ChartPullSecret)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("error prefixing chart pull secret %q: %w", version.ChartPullSecret, err)
 	}
 
-	ociRepo, err := r.createOrUpdateOCIRepository(ctx, providerConfig.GetChartURL(), svcobj.Spec.Version, prefixedSecretName, tenantNamespace)
+	if err := r.replicateChartPullSecret(ctx, version.ChartPullSecret, types.NamespacedName{Name: prefixedSecretName, Namespace: tenantNamespace}); err != nil {
+		spruntime.StatusFailed(svcobj, err.Error())
+		return ctrl.Result{}, fmt.Errorf("failed to replicate chart pull secret: %w", err)
+	}
+
+	ociRepo, err := r.createOrUpdateOCIRepository(ctx, version.GetChartURL(), version.ChartVersion, prefixedSecretName, tenantNamespace)
 	if err != nil {
 		spruntime.StatusFailed(svcobj, err.Error())
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile OCI Repository: %w", err)
 	}
-	if err := r.replicateMCPImagePullSecrets(ctx, clusterCtx.MCPCluster, providerConfig); err != nil {
+	if err := r.replicateMCPImagePullSecrets(ctx, clusterCtx.MCPCluster, version.HelmValues); err != nil {
 		spruntime.StatusFailed(svcobj, err.Error())
 		return ctrl.Result{}, fmt.Errorf("failed to replicate MCP image pull secrets: %w", err)
 	}
-	helmRel, err := r.createOrUpdateHelmRelease(ctx, tenantNamespace, svcobj, providerConfig)
+	helmRel, err := r.createOrUpdateHelmRelease(ctx, tenantNamespace, svcobj, version.HelmValues)
 	if err != nil {
 		spruntime.StatusFailed(svcobj, err.Error())
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile HelmRelease: %w", err)
@@ -157,8 +166,8 @@ func (r *OCMReconciler) CreateOrUpdate(ctx context.Context, svcobj *apiv1alpha1.
 	return ctrl.Result{}, nil
 }
 
-// Delete is called on every delete event
-func (r *OCMReconciler) Delete(ctx context.Context, obj *apiv1alpha1.OCM, providerConfig *apiv1alpha1.ProviderConfig, clusterCtx spruntime.ClusterContext) (ctrl.Result, error) {
+// Delete is called on every delete event.
+func (r *OCMReconciler) Delete(ctx context.Context, obj *apiv1alpha1.OCM, _ *apiv1alpha1.ProviderConfig, clusterCtx spruntime.ClusterContext) (ctrl.Result, error) {
 	spruntime.StatusTerminating(obj)
 
 	tenantNamespace, err := libutils.StableMCPNamespace(obj.Name, obj.Namespace)
@@ -179,20 +188,14 @@ func (r *OCMReconciler) Delete(ctx context.Context, obj *apiv1alpha1.OCM, provid
 
 	obj.Status.Resources = managedResources(tenantNamespace, apiv1alpha1.Terminating)
 
-	prefixedSecretName, err := prefixSecretName(providerConfig.GetImagePullSecret())
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("error prefixing image pull secret %q: %w", providerConfig.GetImagePullSecret().Name, err)
+	objects := []client.Object{
+		&sourcev1.OCIRepository{
+			ObjectMeta: metav1.ObjectMeta{Name: OCIRepositoryName, Namespace: tenantNamespace},
+		},
+		&helmv2.HelmRelease{
+			ObjectMeta: metav1.ObjectMeta{Name: HelmReleaseName, Namespace: tenantNamespace},
+		},
 	}
-
-	var objects []client.Object
-	ociRepository := createOciRepository(providerConfig.GetChartURL(), prefixedSecretName, obj.Spec.Version, tenantNamespace)
-	objects = append(objects, ociRepository)
-	helmRelease, err := r.createHelmRelease(ctx, tenantNamespace, obj, providerConfig)
-	if err != nil {
-		spruntime.StatusFailed(obj, err.Error())
-		return ctrl.Result{}, fmt.Errorf("failed to create helm release: %w", err)
-	}
-	objects = append(objects, helmRelease)
 
 	objectsStillExist := false
 	for _, managedObj := range objects {
@@ -200,9 +203,7 @@ func (r *OCMReconciler) Delete(ctx context.Context, obj *apiv1alpha1.OCM, provid
 			spruntime.StatusFailed(obj, err.Error())
 			return ctrl.Result{}, fmt.Errorf("delete object failed: %w", err)
 		}
-		// we ignore any other error because we assume that if deleting worked, getting should not fail with anything other than
-		// not found.
-		if err := r.PlatformCluster.Client().Get(ctx, client.ObjectKeyFromObject(managedObj), managedObj); client.IgnoreNotFound(err) != nil {
+		if err := r.PlatformCluster.Client().Get(ctx, client.ObjectKeyFromObject(managedObj), managedObj); !apierrors.IsNotFound(err) {
 			objectsStillExist = true
 		}
 	}
@@ -319,17 +320,18 @@ func (r *OCMReconciler) getMcpFluxConfig(ctx context.Context, namespace, objectN
 	}, nil
 }
 
-func (r *OCMReconciler) replicateImagePullSecret(ctx context.Context, providerConfig *apiv1alpha1.ProviderConfig, target types.NamespacedName) error {
-	ref := providerConfig.GetImagePullSecret()
-	if ref == nil {
+// replicateChartPullSecret copies the named secret from the controller's namespace into the
+// tenant namespace on the platform cluster, where the OCIRepository references it.
+func (r *OCMReconciler) replicateChartPullSecret(ctx context.Context, secretName string, target types.NamespacedName) error {
+	if secretName == "" {
 		return nil
 	}
 	platformClient := r.PlatformCluster.Client()
 
 	sourceSecret := &corev1.Secret{}
-	sourceKey := client.ObjectKey{Name: ref.Name, Namespace: r.PodNamespace}
+	sourceKey := client.ObjectKey{Name: secretName, Namespace: r.PodNamespace}
 	if err := platformClient.Get(ctx, sourceKey, sourceSecret); err != nil {
-		return fmt.Errorf("failed to get image pull secret %q from namespace %q: %w", ref.Name, r.PodNamespace, err)
+		return fmt.Errorf("failed to get chart pull secret %q from namespace %q: %w", secretName, r.PodNamespace, err)
 	}
 
 	targetSecret := &corev1.Secret{
@@ -343,22 +345,22 @@ func (r *OCMReconciler) replicateImagePullSecret(ctx context.Context, providerCo
 		targetSecret.Type = sourceSecret.Type
 		return nil
 	}); err != nil {
-		return fmt.Errorf("failed to replicate image pull secret %q to namespace %q: %w", ref.Name, target.Namespace, err)
+		return fmt.Errorf("failed to replicate chart pull secret %q to namespace %q: %w", secretName, target.Namespace, err)
 	}
 
 	return nil
 }
 
 // replicateMCPImagePullSecrets copies every secret referenced under
-// `manager.imagePullSecrets` in the ProviderConfig Helm values from the controller's
+// `manager.imagePullSecrets` in the version's Helm values from the controller's
 // own namespace on the platform cluster into the ocm-k8s-toolkit-system namespace
 // on the MCP cluster, so the deployed controller can pull its images from private
 // registries. The target namespace is created if it does not exist.
 //
 // Cleanup is not required: when the MCP is torn down or the chart namespace is
 // removed, the copied secrets are garbage-collected with it.
-func (r *OCMReconciler) replicateMCPImagePullSecrets(ctx context.Context, mcpCluster *clusters.Cluster, providerConfig *apiv1alpha1.ProviderConfig) error {
-	helmValues, err := ExtractHelmValues(providerConfig.GetValues())
+func (r *OCMReconciler) replicateMCPImagePullSecrets(ctx context.Context, mcpCluster *clusters.Cluster, values *apiextensionsv1.JSON) error {
+	helmValues, err := ExtractHelmValues(values)
 	if err != nil {
 		return err
 	}
@@ -400,8 +402,8 @@ func (r *OCMReconciler) replicateMCPImagePullSecrets(ctx context.Context, mcpClu
 	return nil
 }
 
-func (r *OCMReconciler) createOrUpdateOCIRepository(ctx context.Context, chartURL, version, secretName, namespace string) (*sourcev1.OCIRepository, error) {
-	ociRepository := createOciRepository(chartURL, secretName, version, namespace)
+func (r *OCMReconciler) createOrUpdateOCIRepository(ctx context.Context, chartURL, chartVersion, secretName, namespace string) (*sourcev1.OCIRepository, error) {
+	ociRepository := createOciRepository(chartURL, secretName, chartVersion, namespace)
 	managedObj := &sourcev1.OCIRepository{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ociRepository.Name,
@@ -420,8 +422,8 @@ func (r *OCMReconciler) createOrUpdateOCIRepository(ctx context.Context, chartUR
 	return managedObj, nil
 }
 
-func (r *OCMReconciler) createOrUpdateHelmRelease(ctx context.Context, namespace string, svcobj *apiv1alpha1.OCM, providerConfig *apiv1alpha1.ProviderConfig) (*helmv2.HelmRelease, error) {
-	helmRelease, err := r.createHelmRelease(ctx, namespace, svcobj, providerConfig)
+func (r *OCMReconciler) createOrUpdateHelmRelease(ctx context.Context, namespace string, svcobj *apiv1alpha1.OCM, values *apiextensionsv1.JSON) (*helmv2.HelmRelease, error) {
+	helmRelease, err := r.createHelmRelease(ctx, namespace, svcobj, values)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create helm release: %w", err)
 	}
@@ -443,14 +445,7 @@ func (r *OCMReconciler) createOrUpdateHelmRelease(ctx context.Context, namespace
 	return managedObj, nil
 }
 
-func ensureOCIScheme(url string) string {
-	if !strings.HasPrefix(url, "oci://") {
-		return "oci://" + url
-	}
-	return url
-}
-
-func createOciRepository(chartURL, secretName, version, namespace string) *sourcev1.OCIRepository {
+func createOciRepository(chartURL, secretName, chartVersion, namespace string) *sourcev1.OCIRepository {
 	var secretRef *meta.LocalObjectReference
 	if secretName != "" {
 		secretRef = &meta.LocalObjectReference{Name: secretName}
@@ -463,22 +458,20 @@ func createOciRepository(chartURL, secretName, version, namespace string) *sourc
 		},
 		Spec: sourcev1.OCIRepositorySpec{
 			Interval:  metav1.Duration{Duration: time.Minute},
-			URL:       ensureOCIScheme(chartURL),
+			URL:       chartURL,
 			SecretRef: secretRef,
 			Reference: &sourcev1.OCIRepositoryRef{
-				Tag: version,
+				Tag: chartVersion,
 			},
 		},
 	}
 }
 
-func (r *OCMReconciler) createHelmRelease(ctx context.Context, namespace string, svcobj *apiv1alpha1.OCM, providerConfig *apiv1alpha1.ProviderConfig) (*helmv2.HelmRelease, error) {
+func (r *OCMReconciler) createHelmRelease(ctx context.Context, namespace string, svcobj *apiv1alpha1.OCM, helmValues *apiextensionsv1.JSON) (*helmv2.HelmRelease, error) {
 	fluxConfigRef, err := r.getMcpFluxConfig(ctx, namespace, svcobj.Name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get FluxConfig: %w", err)
 	}
-
-	helmValues := providerConfig.GetValues()
 
 	return &helmv2.HelmRelease{
 		ObjectMeta: metav1.ObjectMeta{
@@ -518,12 +511,11 @@ func (r *OCMReconciler) createHelmRelease(ctx context.Context, namespace string,
 	}, nil
 }
 
-// prefixSecretName adds the "sp-ocm-" prefix to the given secret to prevent name collisions
-// in namespaces where multiple service providers operate. If the resulting name exceeds k8s limit,
-// it will be truncated and a hash suffix appended for uniqueness.
-func prefixSecretName(secret *corev1.LocalObjectReference) (string, error) {
-	if secret == nil {
+// prefixSecretName adds the "sp-ocm-" prefix to the given secret name to prevent name collisions
+// in namespaces where multiple service providers operate.
+func prefixSecretName(secretName string) (string, error) {
+	if secretName == "" {
 		return "", nil
 	}
-	return ctrlutils.ShortenToXCharacters(fmt.Sprintf("%s%s", secretNamePrefix, secret.Name), ctrlutils.K8sMaxNameLength)
+	return ctrlutils.ShortenToXCharacters(fmt.Sprintf("%s%s", secretNamePrefix, secretName), ctrlutils.K8sMaxNameLength)
 }

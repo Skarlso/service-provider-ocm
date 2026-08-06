@@ -15,6 +15,8 @@ const (
 	StatusPhaseProgressing = "Progressing"
 	// StatusPhaseTerminating indicates that the resource is not ready and in deletion.
 	StatusPhaseTerminating = "Terminating"
+	// StatusPhaseFailed indicates that the resource failed to reach its desired state.
+	StatusPhaseFailed = "Failed"
 
 	reasonReconcileError = "ReconcileError"
 )
@@ -55,7 +57,7 @@ func StatusFailed(obj ServiceProviderAPI, msg string) {
 		Message:            msg,
 	})
 	obj.SetObservedGeneration(obj.GetGeneration())
-	obj.SetPhase(StatusPhaseReady)
+	obj.SetPhase(StatusPhaseFailed)
 }
 
 // StatusTerminating indicates terminating with synced false
