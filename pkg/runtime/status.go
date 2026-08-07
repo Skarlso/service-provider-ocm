@@ -6,6 +6,8 @@ import (
 )
 
 // TODO: Move status fuctions and constants to separate repository
+// The phases and functions here mirror opencontrolplane-runtime's serviceprovider package,
+// so that move stays a mechanical swap. Do not add phases it does not have.
 const (
 	// ServiceProviderConditionReady is the condition type used when reporting status
 	ServiceProviderConditionReady = "Ready"
@@ -15,8 +17,6 @@ const (
 	StatusPhaseProgressing = "Progressing"
 	// StatusPhaseTerminating indicates that the resource is not ready and in deletion.
 	StatusPhaseTerminating = "Terminating"
-	// StatusPhaseFailed indicates that the resource failed to reach its desired state.
-	StatusPhaseFailed = "Failed"
 
 	reasonReconcileError = "ReconcileError"
 )
@@ -47,19 +47,6 @@ func StatusReady(obj ServiceProviderAPI) {
 	obj.SetPhase(StatusPhaseReady)
 }
 
-// StatusFailed indicates ready with ready false
-func StatusFailed(obj ServiceProviderAPI, msg string) {
-	meta.SetStatusCondition(obj.GetConditions(), metav1.Condition{
-		Type:               ServiceProviderConditionReady,
-		Status:             metav1.ConditionFalse,
-		ObservedGeneration: obj.GetGeneration(),
-		Reason:             "ReconcileFailed",
-		Message:            msg,
-	})
-	obj.SetObservedGeneration(obj.GetGeneration())
-	obj.SetPhase(StatusPhaseFailed)
-}
-
 // StatusTerminating indicates terminating with synced false
 func StatusTerminating(obj ServiceProviderAPI) {
 	meta.SetStatusCondition(obj.GetConditions(), metav1.Condition{
@@ -75,10 +62,11 @@ func StatusTerminating(obj ServiceProviderAPI) {
 
 // StatusTerminatingMessage indicates terminating with a custom message.
 func StatusTerminatingMessage(obj ServiceProviderAPI, message string) {
-	terminatingWithReason(obj, "Terminating", message)
+	StatusTerminatingWithReason(obj, "Terminating", message)
 }
 
-func terminatingWithReason(obj ServiceProviderAPI, reason, message string) {
+// StatusTerminatingWithReason indicates terminating with synced false and a caller-provided reason and message
+func StatusTerminatingWithReason(obj ServiceProviderAPI, reason, message string) {
 	meta.SetStatusCondition(obj.GetConditions(), metav1.Condition{
 		Type:               ServiceProviderConditionReady,
 		Status:             metav1.ConditionFalse,

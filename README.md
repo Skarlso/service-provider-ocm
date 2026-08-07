@@ -36,8 +36,9 @@ spec:
 | `spec.version` | `string` | yes      | The version to install. Must be one of the versions offered by `spec.versions` in the `ProviderConfig` |
 
 _Note_: Any version a tenant may request has to be defined in the `ProviderConfig`. Requesting a
-version that is not on offer leaves the resource in phase `Failed`, with the available versions
-listed in the `Ready` condition message.
+version that is not on offer leaves the resource in phase `Progressing` with the `Ready` condition
+set to `False`, reason `ReconcileError`, and the available versions listed in its message. Nothing
+progresses until the `OCM` resource or the `ProviderConfig` is corrected.
 
 _Note_: The name of the object _**MUST**_ match the name of your MCP cluster offering. This
 is to ensure that no multiple installations can exist for the same cluster.

@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	ctrlerrors "github.com/openmcp-project/controller-utils/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -94,8 +95,8 @@ func TestResolveVersion(t *testing.T) {
 			got, err := tc.config.ResolveVersion(tc.requested)
 			if tc.wantErr != "" {
 				require.Error(t, err)
-				// Callers branch on this sentinel to tell user input apart from real failures.
 				assert.ErrorIs(t, err, v1alpha1.ErrVersionNotAvailable)
+				assert.ErrorIs(t, err, ctrlerrors.ErrInvalidUserInput)
 				assert.Contains(t, err.Error(), tc.wantErr)
 				return
 			}

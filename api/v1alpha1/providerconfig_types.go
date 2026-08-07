@@ -17,11 +17,11 @@ limitations under the License.
 package v1alpha1
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	ctrlerrors "github.com/openmcp-project/controller-utils/pkg/errors"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -35,9 +35,8 @@ const (
 )
 
 // ErrVersionNotAvailable indicates that a version requested through OCM.Spec.Version is not
-// offered by the ProviderConfig. This is invalid user input: retrying without a change to
-// either the OCM resource or the ProviderConfig cannot resolve it.
-var ErrVersionNotAvailable = errors.New("requested version is not available")
+// offered by the ProviderConfig.
+var ErrVersionNotAvailable = fmt.Errorf("%w: requested version is not available", ctrlerrors.ErrInvalidUserInput)
 
 // ProviderConfigSpec defines the desired state of ProviderConfig
 type ProviderConfigSpec struct {

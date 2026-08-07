@@ -25,6 +25,7 @@ import (
 	"github.com/fluxcd/pkg/apis/meta"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	ctrlutils "github.com/openmcp-project/controller-utils/pkg/controller"
+	ctrlerrors "github.com/openmcp-project/controller-utils/pkg/errors"
 	clustersv1alpha1 "github.com/openmcp-project/openmcp-operator/api/clusters/v1alpha1"
 	libutils "github.com/openmcp-project/openmcp-operator/lib/utils"
 	corev1 "k8s.io/api/core/v1"
@@ -67,6 +68,9 @@ const (
 	// deletionBlockedRequeue is how long to wait before re-checking whether the
 	// user's ocm resources have been removed and deletion may proceed.
 	deletionBlockedRequeue = 10 * time.Second
+
+	// conditionReasonError is the Ready condition reason used when a reconcile step fails.
+	conditionReasonError = "ReconcileError"
 )
 
 // clusterAccessName is the name of the access object containing the kubeconfig for the mcp target cluster.
@@ -98,8 +102,8 @@ func (r *OCMReconciler) CreateOrUpdate(ctx context.Context, svcobj *apiv1alpha1.
 	version, err := providerConfig.ResolveVersion(svcobj.Spec.Version)
 	if err != nil {
 		l.Info("requested version is not offered by the provider config", "version", svcobj.Spec.Version, "error", err.Error())
-		spruntime.StatusFailed(svcobj, err.Error())
-		return ctrl.Result{}, nil
+		spruntime.StatusProgressing(svcobj, conditionReasonError, err.Error())
+		return ctrl.Result{}, ctrlerrors.IgnoreInvalidUserInput(err)
 	}
 	l.Info("resolved requested version", "version", version.Version, "chartVersion", version.ChartVersion, "chartURL", version.GetChartURL())
 
@@ -109,22 +113,22 @@ func (r *OCMReconciler) CreateOrUpdate(ctx context.Context, svcobj *apiv1alpha1.
 	}
 
 	if err := r.replicateChartPullSecret(ctx, version.ChartPullSecret, types.NamespacedName{Name: prefixedSecretName, Namespace: tenantNamespace}); err != nil {
-		spruntime.StatusFailed(svcobj, err.Error())
+		spruntime.StatusProgressing(svcobj, conditionReasonError, err.Error())
 		return ctrl.Result{}, fmt.Errorf("failed to replicate chart pull secret: %w", err)
 	}
 
 	ociRepo, err := r.createOrUpdateOCIRepository(ctx, version.GetChartURL(), version.ChartVersion, prefixedSecretName, tenantNamespace)
 	if err != nil {
-		spruntime.StatusFailed(svcobj, err.Error())
+		spruntime.StatusProgressing(svcobj, conditionReasonError, err.Error())
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile OCI Repository: %w", err)
 	}
 	if err := r.replicateMCPImagePullSecrets(ctx, clusterCtx.MCPCluster, version.HelmValues); err != nil {
-		spruntime.StatusFailed(svcobj, err.Error())
+		spruntime.StatusProgressing(svcobj, conditionReasonError, err.Error())
 		return ctrl.Result{}, fmt.Errorf("failed to replicate MCP image pull secrets: %w", err)
 	}
 	helmRel, err := r.createOrUpdateHelmRelease(ctx, tenantNamespace, svcobj, version.HelmValues)
 	if err != nil {
-		spruntime.StatusFailed(svcobj, err.Error())
+		spruntime.StatusProgressing(svcobj, conditionReasonError, err.Error())
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile HelmRelease: %w", err)
 	}
 
@@ -179,7 +183,7 @@ func (r *OCMReconciler) Delete(ctx context.Context, obj *apiv1alpha1.OCM, _ *api
 	// control plane, so their managed resources are not orphaned.
 	res, blocked, err := r.repositoriesBlockDeletion(ctx, obj, clusterCtx, tenantNamespace)
 	if err != nil {
-		spruntime.StatusFailed(obj, err.Error())
+		spruntime.StatusTerminatingWithReason(obj, conditionReasonError, err.Error())
 		return ctrl.Result{}, fmt.Errorf("failed to check for remaining ocm resources: %w", err)
 	}
 	if blocked {
@@ -200,7 +204,7 @@ func (r *OCMReconciler) Delete(ctx context.Context, obj *apiv1alpha1.OCM, _ *api
 	objectsStillExist := false
 	for _, managedObj := range objects {
 		if err := r.PlatformCluster.Client().Delete(ctx, managedObj); client.IgnoreNotFound(err) != nil {
-			spruntime.StatusFailed(obj, err.Error())
+			spruntime.StatusTerminatingWithReason(obj, conditionReasonError, err.Error())
 			return ctrl.Result{}, fmt.Errorf("delete object failed: %w", err)
 		}
 		if err := r.PlatformCluster.Client().Get(ctx, client.ObjectKeyFromObject(managedObj), managedObj); !apierrors.IsNotFound(err) {
