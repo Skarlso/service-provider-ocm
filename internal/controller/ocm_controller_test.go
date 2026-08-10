@@ -19,10 +19,15 @@ package controller
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
+	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	"github.com/fluxcd/pkg/apis/meta"
+	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	"github.com/openmcp-project/controller-utils/pkg/clusters"
+	ctrlutils "github.com/openmcp-project/controller-utils/pkg/controller"
+	libutils "github.com/openmcp-project/openmcp-operator/lib/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -178,6 +183,112 @@ func TestCountRepositories(t *testing.T) {
 			assert.Equal(t, tc.want, got)
 		})
 	}
+}
+
+func TestCreateOrUpdate_UnknownVersion(t *testing.T) {
+	obj := &apiv1alpha1.OCM{
+		ObjectMeta: metav1.ObjectMeta{Name: "mcp-01", Namespace: "tenant"},
+		Spec:       apiv1alpha1.OCMSpec{Version: "9.9.9"},
+	}
+	pc := &apiv1alpha1.ProviderConfig{
+		Spec: apiv1alpha1.ProviderConfigSpec{
+			Versions: []apiv1alpha1.OCMVersion{{Version: "0.12.0", ChartVersion: "0.12.0"}},
+		},
+	}
+	r := &OCMReconciler{}
+
+	res, err := r.CreateOrUpdate(context.Background(), obj, pc, spruntime.ClusterContext{})
+	require.NoError(t, err)
+	assert.Zero(t, res.RequeueAfter)
+	assert.Equal(t, spruntime.StatusPhaseProgressing, obj.Status.Phase)
+
+	cond := apimeta.FindStatusCondition(obj.Status.Conditions, spruntime.ServiceProviderConditionReady)
+	require.NotNil(t, cond)
+	assert.Equal(t, metav1.ConditionFalse, cond.Status)
+	assert.Equal(t, conditionReasonError, cond.Reason)
+	assert.Contains(t, cond.Message, `"9.9.9"`)
+	assert.Contains(t, cond.Message, "available versions are: 0.12.0")
+}
+
+func TestDelete_VersionRemovedFromProviderConfig(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+	require.NoError(t, sourcev1.AddToScheme(scheme))
+	require.NoError(t, helmv2.AddToScheme(scheme))
+
+	tenantNamespace, err := libutils.StableMCPNamespace("mcp-01", "tenant")
+	require.NoError(t, err)
+
+	platformClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(
+			&sourcev1.OCIRepository{ObjectMeta: metav1.ObjectMeta{Name: OCIRepositoryName, Namespace: tenantNamespace}},
+			&helmv2.HelmRelease{ObjectMeta: metav1.ObjectMeta{Name: HelmReleaseName, Namespace: tenantNamespace}},
+		).
+		Build()
+
+	obj := &apiv1alpha1.OCM{
+		ObjectMeta: metav1.ObjectMeta{Name: "mcp-01", Namespace: "tenant"},
+		Spec:       apiv1alpha1.OCMSpec{Version: "0.12.0"},
+	}
+	r := &OCMReconciler{PlatformCluster: clusters.NewTestClusterFromClient("platform", platformClient)}
+	clusterCtx := spruntime.ClusterContext{MCPCluster: fakeMCPCluster(t, 0, nil)}
+
+	res, err := r.Delete(context.Background(), obj, &apiv1alpha1.ProviderConfig{}, clusterCtx)
+	require.NoError(t, err)
+	assert.Zero(t, res.RequeueAfter)
+	assert.Nil(t, obj.Status.Resources)
+
+	for _, key := range []client.ObjectKey{
+		{Name: OCIRepositoryName, Namespace: tenantNamespace},
+		{Name: HelmReleaseName, Namespace: tenantNamespace},
+	} {
+		err := platformClient.Get(context.Background(), key, &unstructured.Unstructured{})
+		assert.Error(t, err, "object %q should be gone", key)
+	}
+}
+
+func TestDelete_RequeuesWhileObjectsRemain(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+	require.NoError(t, sourcev1.AddToScheme(scheme))
+	require.NoError(t, helmv2.AddToScheme(scheme))
+
+	platformClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(context.Context, client.WithWatch, client.Object, ...client.DeleteOption) error {
+				return nil
+			},
+			// Object accepted the delete but is held by a finalizer: it is still there.
+			Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
+				return nil
+			},
+		}).
+		Build()
+
+	obj := &apiv1alpha1.OCM{ObjectMeta: metav1.ObjectMeta{Name: "mcp-01", Namespace: "tenant"}}
+	r := &OCMReconciler{PlatformCluster: clusters.NewTestClusterFromClient("platform", platformClient)}
+	clusterCtx := spruntime.ClusterContext{MCPCluster: fakeMCPCluster(t, 0, nil)}
+
+	res, err := r.Delete(context.Background(), obj, &apiv1alpha1.ProviderConfig{}, clusterCtx)
+	require.NoError(t, err)
+	assert.Positive(t, res.RequeueAfter, "deletion must be re-checked while objects remain")
+	assert.NotNil(t, obj.Status.Resources, "managed resources stay reported while terminating")
+}
+
+func TestPrefixSecretName(t *testing.T) {
+	empty, err := prefixSecretName("")
+	require.NoError(t, err)
+	assert.Empty(t, empty, "no chart pull secret configured yields no name")
+
+	name, err := prefixSecretName("regcred")
+	require.NoError(t, err)
+	assert.Equal(t, secretNamePrefix+"regcred", name)
+
+	long, err := prefixSecretName(strings.Repeat("a", 100))
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(long), ctrlutils.K8sMaxNameLength)
 }
 
 func TestDelete_BlockedByRepositories(t *testing.T) {

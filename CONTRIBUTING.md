@@ -187,7 +187,10 @@ metadata:
   name: ocm
 spec:
   pollInterval: 1m
-  chartURL: ghcr.io/open-component-model/kubernetes/controller/chart
+  versions:
+    - version: v0.12.0
+      chartVersion: "0.12.0"
+      chartURL: oci://ghcr.io/open-component-model/kubernetes/controller/chart
 EOF
 ```
 
@@ -206,7 +209,7 @@ kind: OCM
 metadata:
   name: test # must match your MCP cluster name; KUBECONFIG=<onboarding cluster kubeconfig> kubectl get mcpv2
 spec:
-  version: "0.5.0"
+  version: v0.12.0 # must be one of the versions offered by the ProviderConfig above
 EOF
 ```
 

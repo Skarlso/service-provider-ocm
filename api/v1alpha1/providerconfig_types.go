@@ -17,36 +17,72 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
+	ctrlerrors "github.com/openmcp-project/controller-utils/pkg/errors"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
-// DefaultChartURL points to the default location of where the ocm-k8s-toolkit chart lives.
-const DefaultChartURL = "ghcr.io/open-component-model/kubernetes/controller/chart"
+const (
+	// DefaultChartURL points to the default location of where the ocm-k8s-toolkit chart lives.
+	DefaultChartURL = "oci://ghcr.io/open-component-model/kubernetes/controller/chart"
+	// DefaultPollInterval is used when a ProviderConfig does not set spec.pollInterval.
+	DefaultPollInterval = time.Minute
+)
+
+// ErrVersionNotAvailable indicates that a version requested through OCM.Spec.Version is not
+// offered by the ProviderConfig.
+var ErrVersionNotAvailable = fmt.Errorf("%w: requested version is not available", ctrlerrors.ErrInvalidUserInput)
 
 // ProviderConfigSpec defines the desired state of ProviderConfig
 type ProviderConfigSpec struct {
+	// Versions enumerates the ocm-k8s-toolkit versions that tenants may request through
+	// OCM.Spec.Version, and maps each of them to the artifacts used to install it.
+	// +required
+	// +kubebuilder:validation:MinItems=1
+	// +listType=map
+	// +listMapKey=version
+	Versions []OCMVersion `json:"versions"`
+
+	// PollInterval at which the controller requeues to detect drift.
 	// +optional
 	// +kubebuilder:default:="1m"
 	// +kubebuilder:validation:Format=duration
 	PollInterval *metav1.Duration `json:"pollInterval,omitempty"`
+}
 
-	// ChartURL is the OCI URL of the Helm chart. Defaults to the official ocm-k8s-toolkit chart.
-	// +optional
-	ChartURL string `json:"chartURL,omitempty"`
+// OCMVersion defines a version of the ocm-k8s-toolkit that can be installed.
+type OCMVersion struct {
+	// Version is the ocm-k8s-toolkit version to install.
+	// +required
+	Version string `json:"version"`
 
-	// Values are arbitrary Helm values passed directly to the managed HelmRelease.
-	// +optional
-	Values *apiextensionsv1.JSON `json:"values,omitempty"`
+	// ChartVersion is the tag of the Helm chart to install.
+	// +required
+	ChartVersion string `json:"chartVersion"`
 
-	// ImagePullSecret references a secret in the controller's namespace to replicate
-	// into tenant namespaces and wire as secretRef on the OCIRepository.
+	// ChartURL is a reference to an OCI repository that hosts the ocm-k8s-toolkit Helm chart.
+	// An "oci://" prefix is added automatically when missing.
 	// +optional
-	ImagePullSecret *corev1.LocalObjectReference `json:"imagePullSecret,omitempty"`
+	// +kubebuilder:default="oci://ghcr.io/open-component-model/kubernetes/controller/chart"
+	ChartURL *string `json:"chartURL,omitempty"`
+
+	// ChartPullSecret is the name of a secret in the controller's namespace holding the
+	// credentials to pull the Helm chart. It is replicated into the tenant namespace and
+	// wired as secretRef on the OCIRepository.
+	// The secret must be of type kubernetes.io/dockerconfigjson.
+	// +optional
+	ChartPullSecret string `json:"chartPullSecret,omitempty"`
+
+	// HelmValues are arbitrary Helm values passed directly to the managed HelmRelease.
+	// Secrets referenced under `manager.imagePullSecrets` are replicated from the
+	// controller's namespace into the ocm-k8s-toolkit namespace on the control plane.
+	// +optional
+	HelmValues *apiextensionsv1.JSON `json:"helmValues,omitempty"`
 }
 
 // ProviderConfigStatus defines the observed state of ProviderConfig.
@@ -109,32 +145,47 @@ func init() {
 	})
 }
 
-// PollInterval returns the poll interval duration from the spec.
+// PollInterval returns the poll interval duration from the spec, falling back to
+// DefaultPollInterval when unset.
 func (o *ProviderConfig) PollInterval() time.Duration {
-	// TODO pollInterval has to be required
+	if o == nil || o.Spec.PollInterval == nil {
+		return DefaultPollInterval
+	}
 	return o.Spec.PollInterval.Duration
 }
 
-// GetChartURL returns the configured chart URL or DefaultChartURL if unset. Nil-safe.
-func (o *ProviderConfig) GetChartURL() string {
-	if o == nil || o.Spec.ChartURL == "" {
+// ResolveVersion returns the version entry offering the requested tenant facing version.
+func (o *ProviderConfig) ResolveVersion(version string) (OCMVersion, error) {
+	if o == nil {
+		return OCMVersion{}, fmt.Errorf("%w: %q, no provider config is configured", ErrVersionNotAvailable, version)
+	}
+	availableVersions := make([]string, 0, len(o.Spec.Versions))
+	for _, candidate := range o.Spec.Versions {
+		if candidate.Version == version {
+			return candidate, nil
+		}
+
+		availableVersions = append(availableVersions, candidate.Version)
+	}
+	if len(availableVersions) == 0 {
+		return OCMVersion{}, fmt.Errorf("%w: %q, the provider config offers no versions", ErrVersionNotAvailable, version)
+	}
+	return OCMVersion{}, fmt.Errorf("%w: %q, available versions are: %s", ErrVersionNotAvailable, version, strings.Join(availableVersions, ", "))
+}
+
+// GetChartURL returns the chart URL of this version with an "oci://" scheme, falling back
+// to DefaultChartURL when unset.
+func (v OCMVersion) GetChartURL() string {
+	if v.ChartURL == nil || *v.ChartURL == "" {
 		return DefaultChartURL
 	}
-	return o.Spec.ChartURL
+	return ensureOCIScheme(*v.ChartURL)
 }
 
-// GetValues returns the Helm values or nil if unset. Nil-safe.
-func (o *ProviderConfig) GetValues() *apiextensionsv1.JSON {
-	if o == nil {
-		return nil
+// ensureOCIScheme prefixes the given URL with "oci://" unless it already has the scheme.
+func ensureOCIScheme(url string) string {
+	if !strings.HasPrefix(url, "oci://") {
+		return "oci://" + url
 	}
-	return o.Spec.Values
-}
-
-// GetImagePullSecret returns the image pull secret reference or nil if unset. Nil-safe.
-func (o *ProviderConfig) GetImagePullSecret() *corev1.LocalObjectReference {
-	if o == nil {
-		return nil
-	}
-	return o.Spec.ImagePullSecret
+	return url
 }
