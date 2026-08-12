@@ -111,10 +111,14 @@
       customType: 'regex',
       managerFilePatterns: [
         '/test/e2e/onboarding/ocm\\.yaml/',
+        '/test/e2e/platform/providerconfig\\.yaml/',
         '/README\\.md/',
       ],
       matchStrings: [
-        '# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\n\\s+version:\\s+(?<currentValue>\\S+)',
+        // `version:` or `- version:`, optional quotes, optional `v` prefix.
+        '# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\n\\s+-?\\s*version:\\s+"?v?(?<currentValue>[^"\\s]+)"?',
+        // `chartVersion:` line under the same renovate comment.
+        '# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\n\\s+-?\\s*version:[^\\n]*\\n\\s+chartVersion:\\s+"?(?<currentValue>[^"\\s]+)"?',
       ],
       versioningTemplate: 'semver',
     },
