@@ -14,5 +14,5 @@ permissions:
 
 jobs:
   build_validate_test:
-    uses: openmcp-project/build/.github/workflows/ci.lib.yaml@9c79f905cb470255a870477cad69de0115a70cc5 # main
+    uses: openmcp-project/build/.github/workflows/ci.lib.yaml@f0c2058996a840e18e05a4ec731e4525e7a01063 # main
     secrets: inherit
