@@ -1,6 +1,6 @@
 module github.com/open-component-model/service-provider-ocm
 
-go 1.26.5
+go 1.26.6
 
 require (
 	github.com/fluxcd/helm-controller/api v1.6.3
@@ -10,7 +10,7 @@ require (
 	github.com/openmcp-project/controller-utils v0.31.0
 	github.com/openmcp-project/openmcp-operator/api v1.3.0
 	github.com/openmcp-project/openmcp-operator/lib v1.3.0
-	github.com/openmcp-project/openmcp-testing v1.2.0
+	github.com/openmcp-project/openmcp-testing v1.3.0
 	github.com/spf13/pflag v1.0.10
 	github.com/stretchr/testify v1.12.0
 	go.uber.org/zap v1.28.0
