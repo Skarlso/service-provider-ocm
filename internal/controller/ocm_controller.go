@@ -26,7 +26,6 @@ import (
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	ctrlutils "github.com/openmcp-project/controller-utils/pkg/controller"
 	ctrlerrors "github.com/openmcp-project/controller-utils/pkg/errors"
-	clustersv1alpha1 "github.com/openmcp-project/openmcp-operator/api/clusters/v1alpha1"
 	libutils "github.com/openmcp-project/openmcp-operator/lib/utils"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -41,10 +40,10 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/openmcp-project/controller-utils/pkg/clusters"
-	"github.com/openmcp-project/openmcp-operator/lib/clusteraccess"
+	spruntime "github.com/openmcp-project/opencontrolplane-runtime/pkg/serviceprovider"
+	"github.com/openmcp-project/opencontrolplane-runtime/pkg/serviceprovider/clusteraccess"
 
 	apiv1alpha1 "github.com/open-component-model/service-provider-ocm/api/v1alpha1"
-	spruntime "github.com/open-component-model/service-provider-ocm/pkg/runtime"
 )
 
 const (
@@ -54,8 +53,6 @@ const (
 	OCIRepositoryName = "sp-ocm-k8s-toolkit"
 	// OcmSystemNamespace is the default namespace on the target cluster to use to install the ocm-k8s-toolkit controller into.
 	OcmSystemNamespace = "ocm-k8s-toolkit-system"
-	// requestSuffixMCP is the suffix used for the mcp cluster.
-	requestSuffixMCP = "--mcp"
 	// secretNamePrefix is used to prefix the chart pull secret copy in the tenant namespace on the platform cluster.
 	secretNamePrefix = "sp-ocm-"
 
@@ -73,9 +70,6 @@ const (
 	conditionReasonError = "ReconcileError"
 )
 
-// clusterAccessName is the name of the access object containing the kubeconfig for the mcp target cluster.
-var clusterAccessName = apiv1alpha1.GroupVersion.Group
-
 // OCMReconciler reconciles a OCM object
 type OCMReconciler struct {
 	// OnboardingCluster is the cluster where this controller watches OCM resources and reacts to their changes.
@@ -87,7 +81,7 @@ type OCMReconciler struct {
 }
 
 // CreateOrUpdate is called on every add or update event
-func (r *OCMReconciler) CreateOrUpdate(ctx context.Context, svcobj *apiv1alpha1.OCM, providerConfig *apiv1alpha1.ProviderConfig, clusterCtx spruntime.ClusterContext) (ctrl.Result, error) {
+func (r *OCMReconciler) CreateOrUpdate(ctx context.Context, svcobj *apiv1alpha1.OCM, providerConfig *apiv1alpha1.ProviderConfig, clusterCtx clusteraccess.ClusterContext) (ctrl.Result, error) {
 	l := logf.FromContext(ctx)
 	l.Info("Reconciling OCM resource", "name", svcobj.Name)
 	spruntime.StatusProgressing(svcobj, "Reconciling", "Reconcile in progress")
@@ -126,7 +120,7 @@ func (r *OCMReconciler) CreateOrUpdate(ctx context.Context, svcobj *apiv1alpha1.
 		spruntime.StatusProgressing(svcobj, conditionReasonError, err.Error())
 		return ctrl.Result{}, fmt.Errorf("failed to replicate MCP image pull secrets: %w", err)
 	}
-	helmRel, err := r.createOrUpdateHelmRelease(ctx, tenantNamespace, svcobj, version.HelmValues)
+	helmRel, err := r.createOrUpdateHelmRelease(ctx, tenantNamespace, version.HelmValues, clusterCtx)
 	if err != nil {
 		spruntime.StatusProgressing(svcobj, conditionReasonError, err.Error())
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile HelmRelease: %w", err)
@@ -171,7 +165,7 @@ func (r *OCMReconciler) CreateOrUpdate(ctx context.Context, svcobj *apiv1alpha1.
 }
 
 // Delete is called on every delete event.
-func (r *OCMReconciler) Delete(ctx context.Context, obj *apiv1alpha1.OCM, _ *apiv1alpha1.ProviderConfig, clusterCtx spruntime.ClusterContext) (ctrl.Result, error) {
+func (r *OCMReconciler) Delete(ctx context.Context, obj *apiv1alpha1.OCM, _ *apiv1alpha1.ProviderConfig, clusterCtx clusteraccess.ClusterContext) (ctrl.Result, error) {
 	spruntime.StatusTerminating(obj)
 
 	tenantNamespace, err := libutils.StableMCPNamespace(obj.Name, obj.Namespace)
@@ -230,7 +224,7 @@ func (r *OCMReconciler) Delete(ctx context.Context, obj *apiv1alpha1.OCM, _ *api
 // and repositories have deletion prevention in case there is anything still referencing them.
 // Therefor it's enough to check for Repository existence because if they don't, usually,
 // nothing else does.
-func (r *OCMReconciler) repositoriesBlockDeletion(ctx context.Context, obj *apiv1alpha1.OCM, clusterCtx spruntime.ClusterContext, tenantNamespace string) (ctrl.Result, bool, error) {
+func (r *OCMReconciler) repositoriesBlockDeletion(ctx context.Context, obj *apiv1alpha1.OCM, clusterCtx clusteraccess.ClusterContext, tenantNamespace string) (ctrl.Result, bool, error) {
 	if clusterCtx.MCPCluster == nil {
 		return ctrl.Result{}, false, nil
 	}
@@ -243,7 +237,7 @@ func (r *OCMReconciler) repositoriesBlockDeletion(ctx context.Context, obj *apiv
 	}
 	msg := fmt.Sprintf("deletion blocked: waiting for %d ocm Repository resource(s) to be removed from the control plane", remaining)
 	logf.FromContext(ctx).Info(msg)
-	spruntime.StatusTerminatingMessage(obj, msg)
+	spruntime.StatusTerminatingWithReason(obj, "ResourcesRemain", msg)
 	obj.Status.Resources = managedResources(tenantNamespace, apiv1alpha1.Terminating)
 	return ctrl.Result{RequeueAfter: deletionBlockedRequeue}, true, nil
 }
@@ -304,24 +298,6 @@ func resourceStatus(conditions []metav1.Condition) (apiv1alpha1.InstancePhase, s
 		return apiv1alpha1.Progressing, cond.Message
 	}
 	return apiv1alpha1.Progressing, ""
-}
-
-func (r *OCMReconciler) getMcpFluxConfig(ctx context.Context, namespace, objectName string) (*meta.SecretKeyReference, error) {
-	mcpAccessRequest := &clustersv1alpha1.AccessRequest{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      clusteraccess.StableRequestNameFromLocalName(clusterAccessName, objectName) + requestSuffixMCP,
-			Namespace: namespace,
-		},
-	}
-
-	if err := r.PlatformCluster.Client().Get(ctx, client.ObjectKeyFromObject(mcpAccessRequest), mcpAccessRequest); err != nil {
-		return nil, fmt.Errorf("failed to get MCP AccessRequest: %w", err)
-	}
-
-	return &meta.SecretKeyReference{
-		Name: mcpAccessRequest.Status.SecretRef.Name,
-		Key:  "kubeconfig",
-	}, nil
 }
 
 // replicateChartPullSecret copies the named secret from the controller's namespace into the
@@ -426,8 +402,8 @@ func (r *OCMReconciler) createOrUpdateOCIRepository(ctx context.Context, chartUR
 	return managedObj, nil
 }
 
-func (r *OCMReconciler) createOrUpdateHelmRelease(ctx context.Context, namespace string, svcobj *apiv1alpha1.OCM, values *apiextensionsv1.JSON) (*helmv2.HelmRelease, error) {
-	helmRelease, err := r.createHelmRelease(ctx, namespace, svcobj, values)
+func (r *OCMReconciler) createOrUpdateHelmRelease(ctx context.Context, namespace string, values *apiextensionsv1.JSON, clusterCtx clusteraccess.ClusterContext) (*helmv2.HelmRelease, error) {
+	helmRelease, err := r.createHelmRelease(namespace, values, clusterCtx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create helm release: %w", err)
 	}
@@ -471,12 +447,7 @@ func createOciRepository(chartURL, secretName, chartVersion, namespace string) *
 	}
 }
 
-func (r *OCMReconciler) createHelmRelease(ctx context.Context, namespace string, svcobj *apiv1alpha1.OCM, helmValues *apiextensionsv1.JSON) (*helmv2.HelmRelease, error) {
-	fluxConfigRef, err := r.getMcpFluxConfig(ctx, namespace, svcobj.Name)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get FluxConfig: %w", err)
-	}
-
+func (r *OCMReconciler) createHelmRelease(namespace string, helmValues *apiextensionsv1.JSON, clusterCtx clusteraccess.ClusterContext) (*helmv2.HelmRelease, error) {
 	return &helmv2.HelmRelease{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      HelmReleaseName,
@@ -509,7 +480,10 @@ func (r *OCMReconciler) createHelmRelease(ctx context.Context, namespace string,
 			},
 			Values: helmValues,
 			KubeConfig: &meta.KubeConfigReference{
-				SecretRef: fluxConfigRef,
+				SecretRef: &meta.SecretKeyReference{
+					Name: clusterCtx.MCPAccessSecretKey.Name,
+					Key:  "kubeconfig",
+				},
 			},
 		},
 	}, nil

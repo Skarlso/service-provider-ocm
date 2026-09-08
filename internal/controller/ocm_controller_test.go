@@ -27,6 +27,8 @@ import (
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	"github.com/openmcp-project/controller-utils/pkg/clusters"
 	ctrlutils "github.com/openmcp-project/controller-utils/pkg/controller"
+	spruntime "github.com/openmcp-project/opencontrolplane-runtime/pkg/serviceprovider"
+	"github.com/openmcp-project/opencontrolplane-runtime/pkg/serviceprovider/clusteraccess"
 	libutils "github.com/openmcp-project/openmcp-operator/lib/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -41,7 +43,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	apiv1alpha1 "github.com/open-component-model/service-provider-ocm/api/v1alpha1"
-	spruntime "github.com/open-component-model/service-provider-ocm/pkg/runtime"
 )
 
 func TestResourceStatus(t *testing.T) {
@@ -197,7 +198,7 @@ func TestCreateOrUpdate_UnknownVersion(t *testing.T) {
 	}
 	r := &OCMReconciler{}
 
-	res, err := r.CreateOrUpdate(context.Background(), obj, pc, spruntime.ClusterContext{})
+	res, err := r.CreateOrUpdate(context.Background(), obj, pc, clusteraccess.ClusterContext{})
 	require.NoError(t, err)
 	assert.Zero(t, res.RequeueAfter)
 	assert.Equal(t, spruntime.StatusPhaseProgressing, obj.Status.Phase)
@@ -232,7 +233,7 @@ func TestDelete_VersionRemovedFromProviderConfig(t *testing.T) {
 		Spec:       apiv1alpha1.OCMSpec{Version: "0.12.0"},
 	}
 	r := &OCMReconciler{PlatformCluster: clusters.NewTestClusterFromClient("platform", platformClient)}
-	clusterCtx := spruntime.ClusterContext{MCPCluster: fakeMCPCluster(t, 0, nil)}
+	clusterCtx := clusteraccess.ClusterContext{MCPCluster: fakeMCPCluster(t, 0, nil)}
 
 	res, err := r.Delete(context.Background(), obj, &apiv1alpha1.ProviderConfig{}, clusterCtx)
 	require.NoError(t, err)
@@ -269,7 +270,7 @@ func TestDelete_RequeuesWhileObjectsRemain(t *testing.T) {
 
 	obj := &apiv1alpha1.OCM{ObjectMeta: metav1.ObjectMeta{Name: "mcp-01", Namespace: "tenant"}}
 	r := &OCMReconciler{PlatformCluster: clusters.NewTestClusterFromClient("platform", platformClient)}
-	clusterCtx := spruntime.ClusterContext{MCPCluster: fakeMCPCluster(t, 0, nil)}
+	clusterCtx := clusteraccess.ClusterContext{MCPCluster: fakeMCPCluster(t, 0, nil)}
 
 	res, err := r.Delete(context.Background(), obj, &apiv1alpha1.ProviderConfig{}, clusterCtx)
 	require.NoError(t, err)
@@ -296,7 +297,7 @@ func TestDelete_BlockedByRepositories(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "mcp-01", Namespace: "tenant"},
 	}
 	r := &OCMReconciler{}
-	clusterCtx := spruntime.ClusterContext{MCPCluster: fakeMCPCluster(t, 2, nil)}
+	clusterCtx := clusteraccess.ClusterContext{MCPCluster: fakeMCPCluster(t, 2, nil)}
 
 	res, err := r.Delete(context.Background(), obj, &apiv1alpha1.ProviderConfig{}, clusterCtx)
 	require.NoError(t, err)
