@@ -47,7 +47,6 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -55,7 +54,7 @@ import (
 
 	"github.com/open-component-model/service-provider-ocm/api/crds"
 
-	spruntime "github.com/open-component-model/service-provider-ocm/pkg/runtime"
+	"github.com/openmcp-project/opencontrolplane-runtime/pkg/serviceprovider"
 
 	ocmsv1alpha1 "github.com/open-component-model/service-provider-ocm/api/v1alpha1"
 	"github.com/open-component-model/service-provider-ocm/internal/controller"
@@ -310,39 +309,33 @@ func main() {
 		setupLog.Error(err, "unable to add platform cluster to manager")
 		os.Exit(1)
 	}
-	providerConfigUpdates := make(chan event.GenericEvent)
-	spr := spruntime.NewSPReconciler[*ocmsv1alpha1.OCM, *ocmsv1alpha1.ProviderConfig](
-		func() *ocmsv1alpha1.OCM { return &ocmsv1alpha1.OCM{} },
-	).
-		WithPlatformCluster(platformCluster).
-		WithOnboardingCluster(onboardingCluster).
-		WithServiceProviderReconciler(&controller.OCMReconciler{
+
+	spr := serviceprovider.NewAPIReconcilerBuilder[*ocmsv1alpha1.OCM, *ocmsv1alpha1.ProviderConfig]().
+		EmptyObjectProvider(func() *ocmsv1alpha1.OCM { return &ocmsv1alpha1.OCM{} }).
+		EmptyConfigProvider(func() *ocmsv1alpha1.ProviderConfig { return &ocmsv1alpha1.ProviderConfig{} }).
+		PlatformCluster(platformCluster).
+		OnboardingCluster(onboardingCluster).
+		WorkloadCluster(false).
+		Reconciler(&controller.OCMReconciler{
 			OnboardingCluster: onboardingCluster,
 			PlatformCluster:   platformCluster,
 			PodNamespace:      podNamespace,
 		}).
 		// The name here for the controller is quite important as it will result in the generated name for access requests and secrets.
-		WithClusterAccessReconciler(clusteraccess.NewClusterAccessReconciler(platformCluster.Client(), ocmsv1alpha1.GroupVersion.Group).
+		ClusterAccessReconciler(clusteraccess.NewClusterAccessReconciler(platformCluster.Client(), ocmsv1alpha1.GroupVersion.Group).
 			WithMCPScheme(mcpScheme).
 			WithRetryInterval(10 * time.Second).
 			WithMCPPermissions(adminPermissions).WithMCPRoleRefs([]common.RoleRef{
 			{
 				Name: "cluster-admin",
 				Kind: "ClusterRole",
-			}}))
-	if err := spr.SetupWithManager(mgr, "ocm", providerConfigUpdates); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "OCM")
+			}})).
+		MustBuild()
+	if err := spr.SetupWithManager(mgr, providerName); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", providerName)
 		os.Exit(1)
 	}
-	pcr := spruntime.NewPCReconciler(providerName, func() *ocmsv1alpha1.ProviderConfig {
-		return &ocmsv1alpha1.ProviderConfig{}
-	}).
-		WithPlatformCluster(platformCluster).
-		WithUpdateChannel(providerConfigUpdates)
-	if err := pcr.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "ProviderConfig")
-		os.Exit(1)
-	}
+
 	// +kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
