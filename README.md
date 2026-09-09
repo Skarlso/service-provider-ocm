@@ -60,8 +60,8 @@ spec:
       chartVersion: "0.11.0"
       chartURL: oci://ghcr.io/open-component-model/kubernetes/controller/chart
     # renovate: datasource=docker depName=ghcr.io/open-component-model/kubernetes/controller/chart
-    - version: v0.14.0
-      chartVersion: "0.14.0"
+    - version: v0.15.0
+      chartVersion: "0.15.0"
       chartURL: oci://ghcr.io/open-component-model/kubernetes/controller/chart
       chartPullSecret: my-registry-secret
       helmValues:

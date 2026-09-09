@@ -4,4 +4,4 @@ metadata:
   name: test-mcp
 spec:
   # renovate: datasource=docker depName=ghcr.io/open-component-model/kubernetes/controller/chart
-  version: 0.14.0
+  version: 0.15.0
