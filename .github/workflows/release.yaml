@@ -95,20 +95,13 @@ jobs:
             git push origin "${MODULE}/${{ env.version }}"
           done
 
-      - name: Build Changelog
-        id: github_release
-        run: task r:generate-changelog
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Create GitHub release
         if: ${{ env.SKIP != 'true' }}
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           tag_name: ${{ env.version }}
           name: Release ${{ env.version }}
-          body_path: ./CHANGELOG.md
-          draft: true
+          generate_release_notes: true
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
